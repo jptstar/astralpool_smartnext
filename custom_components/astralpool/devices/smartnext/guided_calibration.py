@@ -114,12 +114,7 @@ async def _async_command_edge(api: Any, coil: int) -> None:
 
 
 async def async_clear_response_in_active_mode(api: Any, *, force: bool = False) -> None:
-    """Clear IR 0x22 with 0x203 while 0x201 is already active.
-
-    Entering 0x201 normally clears IR 0x22 on the validated controller. The
-    explicit 0x203 pulse is nevertheless required by the validated pH/ORP
-    factory-reset sequence, so callers can force it even when IR 0x22 is 0.
-    """
+    """Clear IR 0x22 with 0x203 while 0x201 is already active."""
     await async_rearm_calibration_mode(api)
     if not force and await async_read_calibration_response(api) == RESPONSE_NONE:
         return
@@ -149,14 +144,12 @@ async def async_start_calibration_session(api: Any, *, force_clear: bool = False
         await async_clear_response_in_active_mode(api, force=True)
         return
 
-    # Real hardware normally clears the shared result as soon as 0x201 enters.
     deadline = asyncio.get_running_loop().time() + 1.5
     while asyncio.get_running_loop().time() < deadline:
         if await async_read_calibration_response(api) == RESPONSE_NONE:
             return
         await asyncio.sleep(CALIBRATION_POLL_SECONDS)
 
-    # If a stale result remains, 0x203 is valid only after 0x201 is active.
     await async_clear_response_in_active_mode(api)
 
 
@@ -169,8 +162,6 @@ async def _async_wait_for_response(api: Any, previous_response: int) -> int:
             return response
 
         if not await async_read_calibration_mode(api):
-            # A terminal result and automatic 0x201 release happen almost
-            # together. Read IR 0x22 one last time before reporting mode loss.
             response = await async_read_calibration_response(api)
             return response if response != previous_response else RESPONSE_MODE_LOST
         await asyncio.sleep(CALIBRATION_POLL_SECONDS)
@@ -178,7 +169,7 @@ async def _async_wait_for_response(api: Any, previous_response: int) -> int:
 
 
 async def async_prepare_bypassed_calibration(api: Any) -> CalibrationSavedState:
-    """Establish persistent 0 % production before the user touches the bypass."""
+    """Establish persistent 0 % production before any hydraulic manipulation."""
     flow_control = (await api._read_holding_registers(HR_FLOW_CONTROL_WORD, 1))[0]
     electrolysis_control = (
         await api._read_holding_registers(HR_ELECTROLYSIS_CONTROL_WORD, 2)
@@ -195,10 +186,10 @@ async def async_prepare_bypassed_calibration(api: Any) -> CalibrationSavedState:
     )
 
     try:
-        # Physical circulation is still normal at this stage. Disable every
-        # known production override and both logical flow inputs before forcing
-        # a persistent 0 % setpoint. This remains the safety layer even if the
-        # controller later drops 0x201 after a success or an error.
+        # This step is intentionally performed while the filtration circuit is
+        # still in its normal hydraulic position. The user is not allowed to
+        # stop filtration or move bypass valves until this persistent software
+        # safety has been established and verified.
         await api.async_write_coil(COIL_FLOW_INTERNAL_SENSOR_ENABLE, False)
         await api.async_write_coil(COIL_FLOW_EXTERNAL_SENSOR_ENABLE, False)
         if saved.boost_enabled:
@@ -229,16 +220,12 @@ async def async_prepare_bypassed_calibration(api: Any) -> CalibrationSavedState:
                 (await api._read_discrete_inputs(DI_ELECTROLYSIS_RUNNING, 1))[0]
             )
             if production == 0 and current_raw == 0 and not running:
-                break
+                return saved
             await asyncio.sleep(OUTPUT_STOP_POLL_SECONDS)
-        else:
-            raise GuidedCalibrationError("electrolysis_not_stopped")
-
-        await async_start_calibration_session(api)
-        return saved
+        raise GuidedCalibrationError("electrolysis_not_stopped")
     except Exception:
-        # No physical bypass has been authorized yet, so restoring the previous
-        # controller state is safe if automatic preparation cannot finish.
+        # No physical action has been authorized yet, so restoring automatically
+        # is safe if the software protection cannot be established.
         await async_restore_bypassed_calibration(
             api,
             saved,
@@ -246,6 +233,14 @@ async def async_prepare_bypassed_calibration(api: Any) -> CalibrationSavedState:
             keep_mode_active=False,
         )
         raise
+
+
+async def async_begin_bypassed_calibration(api: Any) -> None:
+    """Start the validated 0x201 -> 0x203 sequence after hydraulic preparation."""
+    # Physical filtration is already stopped and the cell isolated at this
+    # point, but electrolysis is independently held at 0 %. Enter calibration
+    # mode only now, then explicitly clear IR 0x22 with 0x203 as validated.
+    await async_start_calibration_session(api, force_clear=True)
 
 
 async def async_restore_bypassed_calibration(
@@ -273,8 +268,6 @@ async def async_restore_bypassed_calibration(
             await async_rearm_calibration_mode(api)
             raise GuidedCalibrationError("flow_not_restored")
 
-    # Hydraulics and logical flow protection are now confirmed safe. Release
-    # 0x201 while production is still held at the temporary 0 %.
     await api.async_write_coil(COIL_CALIBRATION_MODE, False)
     await api.async_write_register(
         HR_ELECTROLYSIS_NORMAL_SETPOINT, saved.normal_production_setpoint
@@ -297,13 +290,11 @@ async def async_calibrate_ph_fast(api: Any, reference_ph: float) -> int:
     if not 0 <= raw_value <= 1200:
         raise ValueError(f"pH calibration value out of range: {reference_ph}")
 
-    await async_start_calibration_session(api)
+    await async_start_calibration_session(api, force_clear=True)
     await api.async_write_register(HR_CALIBRATION_VALUE, raw_value)
     await _async_command_edge(api, COIL_PH_CALIBRATION_FAST)
     response = await _async_wait_for_response(api, RESPONSE_NONE)
 
-    # Fast calibration uses normal hydraulics, so automatic production recovery
-    # after the controller leaves 0x201 is safe.
     if await async_read_calibration_mode(api):
         await api.async_write_coil(COIL_CALIBRATION_MODE, False)
     return response
@@ -317,8 +308,6 @@ async def async_trigger_ph7(api: Any) -> int:
     await _async_command_edge(api, COIL_PH_CALIBRATION_PH7)
     response = await _async_wait_for_response(api, RESPONSE_NONE)
     if response != RESPONSE_FIRST_POINT_OK:
-        # Any error terminates 0x201 on the validated hardware. Re-arm before
-        # returning control to the UI while the cell may still be bypassed.
         await async_rearm_calibration_mode(api)
     return response
 
@@ -328,8 +317,6 @@ async def async_trigger_ph4(api: Any) -> int:
     await async_rearm_calibration_mode(api)
     await _async_command_edge(api, COIL_PH_CALIBRATION_PH4)
     response = await _async_wait_for_response(api, RESPONSE_FIRST_POINT_OK)
-    # Success and errors both release 0x201. Re-arm immediately because the
-    # physical bypass has not yet been restored by the user.
     await async_rearm_calibration_mode(api)
     return response
 
@@ -347,8 +334,6 @@ async def async_trigger_orp_470(api: Any) -> int:
         await async_clear_response_in_active_mode(api)
     await _async_command_edge(api, COIL_ORP_CALIBRATION_470MV)
     response = await _async_wait_for_response(api, RESPONSE_NONE)
-    # The validated controller leaves 0x201 after success and after an error.
-    # Re-arm for every terminal result before returning to the guided UI.
     await async_rearm_calibration_mode(api)
     return response
 
@@ -365,9 +350,6 @@ async def _async_reset_calibration(api: Any, coil: int) -> int:
     await _async_command_edge(api, coil)
     response = await _async_wait_for_response(api, RESPONSE_NONE)
 
-    # Reset operations use the normal hydraulic path. The validated controller
-    # exits 0x201 automatically after a terminal result; release it explicitly
-    # only if it unexpectedly remains active.
     if await async_read_calibration_mode(api):
         await api.async_write_coil(COIL_CALIBRATION_MODE, False)
     return response

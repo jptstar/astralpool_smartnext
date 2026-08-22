@@ -4,7 +4,7 @@ Local Modbus integration for supported AstralPool pool equipment.
 
 This repository combines Smart Next and Pro Elyo Touch support under a single Home Assistant domain: `astralpool`.
 
-**Stable baseline:** version 1.0.8.
+**Stable baseline:** version 1.0.9.
 
 > **Unofficial project** — This is an independent community integration. It is not developed, approved, endorsed, or maintained by AstralPool or Fluidra. AstralPool, Fluidra and their product names and trademarks remain the property of their respective owners.
 
@@ -52,7 +52,77 @@ Maintenance is separated into three guided families:
 - **Calibrate a sensor**
 - **Restore factory calibration**
 
-Only procedures validated on real Smart Next hardware are exposed in the guided calibration menus. At present, **Temperature** is the only guided sensor calibration. pH, ORP and salinity remain available through the raw `Calibration TEST` entities while their exact hardware sequences are investigated.
+Only procedures validated on real Smart Next hardware are exposed as guided workflows. Version 1.0.9 adds guided **pH Fast**, **pH Standard two-point**, **Redox / ORP 470 mV**, plus factory calibration reset for pH and ORP. Salinity calibration remains available only through the raw `Calibration TEST` entities until its exact sequence is validated.
+
+### Calibration state machine
+
+The Smart Next uses a common calibration state machine:
+
+- `0x201` enters calibration mode and stops water treatment;
+- once `0x201` is active, `0x203` clears the shared calibration response when required;
+- input register `0x22` reports the result: `0` no response, `1` OK, `2` E2, `3` E3, `4` unavailable, `5` initializing and `16` first point of a two-point calibration accepted;
+- a terminal success or error can automatically release `0x201`, allowing electrolysis to resume.
+
+For any guided procedure where the electrolyzer cell may be physically bypassed, AstralPool therefore does **not** rely on `0x201` as the only safety barrier. Before the UI allows the user to operate the bypass, the integration saves the controller state, disables the logical flow inputs and known production overrides, forces the normal electrolysis setpoint to `0 %`, and verifies **production = 0**, **current = 0** and **electrolysis not running**.
+
+While the cell may still be bypassed, a terminal calibration response is captured immediately and `0x201` is re-enabled straight away if the Smart Next released it. The software enforces a **10-second maximum re-arm window** and keeps the independent `0 %` production safety in place. Production is never restored until the user explicitly confirms that the probe is reinstalled, the valves are back in their normal position and circulation through the electrolyzer is restored. Logical flow supervision is restored and checked before the previous production settings are re-applied.
+
+### Guided pH Fast calibration
+
+Fast calibration keeps the pH probe installed in normal circulation. The user enters a trusted reference pH and Home Assistant performs the hardware-validated sequence:
+
+1. enter calibration mode `0x201`;
+2. make sure shared response `IR 0x22` is clear;
+3. write the reference value multiplied by 100 to holding register `0x22` — for example `7.20 → 720`;
+4. trigger Fast calibration `0x50F`;
+5. read `IR 0x22` and show the exact success/error result.
+
+A successful Fast calibration returns `IR 0x22 = 1` and the controller normally leaves `0x201` automatically.
+
+### Guided pH Standard calibration
+
+The Standard assistant is a two-point calibration using pH 7 then pH 4 solutions.
+
+The UI guides the complete physical and software sequence:
+
+1. keep normal water circulation while AstralPool establishes persistent `0 %` electrolysis and enters `0x201`;
+2. only after the software confirms the cell is stopped, place the hydraulic valves in bypass and confirm that circulation no longer passes through the electrolyzer;
+3. remove and clean the pH probe, immerse it in pH 7 solution, gently agitate it and wait about 30 seconds for a stable value;
+4. validate the first point with `0x50D`; `IR 0x22 = 16` confirms that pH 7 was accepted and `0x201` remains active for the second point;
+5. clean the probe, immerse it in pH 4 solution, wait for stability and validate with `0x50E`;
+6. `IR 0x22 = 1` confirms success; the Smart Next releases `0x201`, so AstralPool immediately re-arms it while the cell is still bypassed;
+7. reinstall the probe, return the valves to normal, restore circulation through the electrolyzer and confirm each item in the UI;
+8. AstralPool restores logical flow supervision, verifies flow, releases `0x201`, then restores the previous production state.
+
+If `IR 0x22` returns E2/E3/4/5 or another terminal failure, the controller may release `0x201`. AstralPool immediately re-arms calibration mode and offers either a retry from pH 7 or a safe restoration of the installation. The persistent `0 %` production safety remains active throughout.
+
+### Guided Redox / ORP calibration
+
+The ORP workflow is validated with a **470 mV reference solution at approximately 25 °C**.
+
+The assistant:
+
+1. establishes persistent `0 %` electrolysis and enters `0x201` while normal circulation is still present;
+2. asks the user to place the valves in bypass and confirm that the electrolyzer is isolated from circulation;
+3. asks the user to remove and clean the ORP probe, immerse it in the 470 mV solution and wait for a stable reading;
+4. triggers calibration with `0x80F`;
+5. reads `IR 0x22`; `1` means success and `2` is E2 when the detected value is too far from 470 mV;
+6. immediately re-arms `0x201` after any terminal response while the bypass remains active;
+7. restores the previous electrolysis state only after the probe, valves and circulation have been explicitly confirmed as normal again.
+
+### Guided pH / ORP factory calibration reset
+
+The factory calibration reset sequence is also validated on real hardware and does not require probe removal or hydraulic bypass.
+
+For pH (`0x50C`) and ORP (`0x80C`), Home Assistant executes:
+
+1. `0x201 = ON`;
+2. `0x203` to clear `IR 0x22` while calibration mode is active;
+3. trigger the relevant reset coil;
+4. read `IR 0x22` — `1` confirms success;
+5. the Smart Next normally releases `0x201` automatically after the terminal result.
+
+Errors `2`, `3`, `4` and `5` are displayed to the user instead of being hidden.
 
 ### Guided temperature calibration
 
@@ -67,19 +137,15 @@ To apply a new reference temperature, Home Assistant:
 
 Example: entering `29.0 °C` writes `290` to holding register `0x22` before triggering `0xB0F`.
 
-To restore the factory temperature calibration, Home Assistant:
+To restore the factory temperature calibration, Home Assistant triggers reset coil `0xB0D`, waits **2 seconds**, then refreshes the device data.
 
-1. triggers reset coil `0xB0D`;
-2. waits **2 seconds**;
-3. refreshes the device data.
-
-These temperature procedures intentionally do not enter the generic `Calibration_Mode` or manipulate flow/electrolysis settings because that is not part of the physically validated temperature sequence.
+Temperature calibration intentionally does not enter generic `Calibration_Mode` because that is not part of the physically validated temperature sequence.
 
 ### Raw calibration test entities
 
-Version 1.0.8 expands the raw calibration diagnostics so the exact Smart Next state machine can be reconstructed on real hardware before pH, ORP and salinity are automated.
+The raw calibration diagnostics remain exposed so protocol work can continue without hiding controller behavior.
 
-The device exposes:
+Available entities include:
 
 - switch: calibration mode `0x201`
 - switch + button: clear calibration response `0x203`
@@ -91,13 +157,9 @@ The device exposes:
 - temperature switches + buttons: reset `0xB0D`, calibration `0xB0F`
 - salinity switches + buttons: reset `0xC0D`, calibration `0xC0F`
 
-All raw test names start with **Calibration TEST** and include the Modbus address. The switches are true read/write entities: their state is refreshed from the actual Smart Next coil and they can explicitly force `OFF` then `ON`. This makes it possible to identify commands that remain latched instead of auto-clearing.
+All raw test names start with **Calibration TEST** and include the Modbus address. The switches read the real Smart Next coil state and can explicitly force `OFF` then `ON`. The buttons intentionally write only `1` and add no hidden sequence.
 
-The raw command buttons remain available and intentionally write only `1` to their documented volatile coil. They do **not** add an automatic release, calibration mode transition, delay or response handling.
-
-The raw response sensor reports the numeric `rsp_calibrado` code and adds its documented meaning as an entity attribute: `0` no response, `1` OK, `2` E2, `3` E3, `4` unavailable, `5` device initializing and `16` first calibration point OK.
-
-The restart procedure is intentionally guided rather than exposed as an entity. Home Assistant first closes the maintenance options flow and starts the restart as a background task; this avoids unloading the integration while its own configuration request is still active. The background task verifies that `Watchdog_config` is the documented restart mode, fully unloads AstralPool so normal polling is stopped, then uses a dedicated Modbus client to arm the minimum 60-second watchdog and closes immediately. After a 70-second communication-silence period, the integration reconnects, restores the previous watchdog timeout and reloads normal polling. Expect the full procedure to take roughly 70–100 seconds.
+The restart procedure remains guided. Home Assistant closes the options flow, stops normal polling, arms the documented watchdog restart, waits for the controller to reboot, restores the previous watchdog timeout and reloads the integration.
 
 The operational **pH · Pump Stop · rearm** action remains available as a normal Home Assistant button.
 
@@ -141,9 +203,9 @@ Do **not** remove the existing integrations before the first test.
 4. Temporarily **disable** the existing Smart Next or Pro Elyo Touch config entry before enabling the matching AstralPool entry. This avoids two integrations polling the same Modbus RTU device at the same time.
 5. Add **AstralPool** and choose the device type.
 6. Verify measurements, controls, alarms, climate functions and diagnostics.
-7. If the test fails, disable/remove the AstralPool entry and re-enable the former integration. No old config entry needs to be deleted for this rollback.
+7. If the test fails, disable/remove the AstralPool entry and re-enable the former integration.
 
-Because the old entities are still registered during a side-by-side test, Home Assistant may temporarily give the new entities IDs ending in `_2`. This is expected and does not indicate a protocol problem.
+Because the old entities are still registered during a side-by-side test, Home Assistant may temporarily give the new entities IDs ending in `_2`. This is expected.
 
 ### Final migration
 

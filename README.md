@@ -54,61 +54,106 @@ Maintenance is separated into three guided families:
 
 Only procedures validated on real Smart Next hardware are exposed as guided workflows. Version 1.0.9 adds guided **pH Fast**, **pH Standard two-point**, **Redox / ORP 470 mV**, plus factory calibration reset for pH and ORP. Salinity calibration remains available only through the raw `Calibration TEST` entities until its exact sequence is validated.
 
-### Calibration state machine
+### Shared calibration state machine
 
-The Smart Next uses a common calibration state machine:
+The Smart Next uses a common calibration mechanism:
 
 - `0x201` enters calibration mode and stops water treatment;
-- once `0x201` is active, `0x203` clears the shared calibration response when required;
+- `0x203`, used while `0x201` is active, clears the shared calibration response;
 - input register `0x22` reports the result: `0` no response, `1` OK, `2` E2, `3` E3, `4` unavailable, `5` initializing and `16` first point of a two-point calibration accepted;
 - a terminal success or error can automatically release `0x201`, allowing electrolysis to resume.
 
-For any guided procedure where the electrolyzer cell may be physically bypassed, AstralPool therefore does **not** rely on `0x201` as the only safety barrier. Before the UI allows the user to operate the bypass, the integration saves the controller state, disables the logical flow inputs and known production overrides, forces the normal electrolysis setpoint to `0 %`, and verifies **production = 0**, **current = 0** and **electrolysis not running**.
+Real-hardware testing also confirmed that simply entering `0x201` normally clears `IR 0x22`; the guided pH/ORP workflows still use an explicit `0x203` after `0x201` for a deterministic fresh session.
 
-While the cell may still be bypassed, a terminal calibration response is captured immediately and `0x201` is re-enabled straight away if the Smart Next released it. The software enforces a **10-second maximum re-arm window** and keeps the independent `0 %` production safety in place. Production is never restored until the user explicitly confirms that the probe is reinstalled, the valves are back in their normal position and circulation through the electrolyzer is restored. Logical flow supervision is restored and checked before the previous production settings are re-applied.
+### Safety architecture for probe-removal procedures
+
+The pH Standard and Redox / ORP procedures require hydraulic isolation of the electrolyzer section. AstralPool therefore does **not** rely on `0x201` alone for safety.
+
+Before the user is allowed to touch the filtration pump or bypass valves, the integration:
+
+1. saves the current Smart Next flow and electrolysis settings;
+2. disables both logical flow inputs;
+3. disables known production overrides, including Boost, cover production, external chlorine control and internal ORP production control when active;
+4. forces the normal electrolysis setpoint to `0 %`;
+5. verifies **electrolysis production = 0**, **cell current = 0** and **electrolysis not running**.
+
+Only after this persistent `0 %` safety has been verified does the UI start the manual hydraulic preparation. `0x201` is intentionally activated **after** that hydraulic preparation is complete.
+
+When a calibration command succeeds or fails, the Smart Next can release `0x201`. While the electrolyzer remains isolated, AstralPool captures `IR 0x22` and re-arms `0x201` immediately. The code enforces a maximum **10-second re-arm window**. The separate `0 %` production safety remains active throughout, so production cannot resume simply because calibration mode has dropped.
+
+Production is restored only after the probe has been reinstalled, both isolation valves are open, the bypass is closed, filtration is running again, logical flow supervision has been restored and the Smart Next confirms normal flow.
+
+### Exact hydraulic preparation — pH Standard and ORP
+
+The same preparation is presented one step at a time for pH Standard and Redox / ORP:
+
+1. keep filtration running and the hydraulic circuit in its normal position while AstralPool establishes and verifies the persistent `0 %` electrolysis safety;
+2. switch **OFF** the filtration pump and physically verify that it has stopped;
+3. fully **OPEN** the electrolyzer bypass valve;
+4. **CLOSE** the upstream/inlet valve, on the probe side of the electrolyzer;
+5. **CLOSE** the downstream/outlet valve of the electrolyzer;
+6. slightly unscrew the probe that will be removed, without removing it completely;
+7. very slightly open the downstream/outlet valve for **no more than 2 seconds** so a small amount of air can enter and the water level in the isolated section can drop, then close the outlet valve again immediately;
+8. only then does Home Assistant start the calibration session with `0x201 ON → 0x203 → IR 0x22 = 0`;
+9. the probe can then be fully removed, cleaned and placed in the calibration solution.
+
+The brief outlet-valve opening is a manual operation. The UI explicitly requires confirmation that the valve has been reclosed and warns not to leave it open for more than two seconds.
 
 ### Guided pH Fast calibration
 
-Fast calibration keeps the pH probe installed in normal circulation. The user enters a trusted reference pH and Home Assistant performs the hardware-validated sequence:
+Fast calibration keeps the pH probe installed in normal circulation. The user enters a trusted reference pH and Home Assistant performs the validated sequence:
 
-1. enter calibration mode `0x201`;
-2. make sure shared response `IR 0x22` is clear;
+1. `0x201 = ON`;
+2. `0x203` clears `IR 0x22`;
 3. write the reference value multiplied by 100 to holding register `0x22` — for example `7.20 → 720`;
 4. trigger Fast calibration `0x50F`;
-5. read `IR 0x22` and show the exact success/error result.
+5. read `IR 0x22` and show the exact result.
 
-A successful Fast calibration returns `IR 0x22 = 1` and the controller normally leaves `0x201` automatically.
+A successful Fast calibration returns `IR 0x22 = 1` and the controller normally releases `0x201` automatically. Because the probe and normal circulation remain in place, no hydraulic bypass procedure is used for Fast calibration.
 
 ### Guided pH Standard calibration
 
-The Standard assistant is a two-point calibration using pH 7 then pH 4 solutions.
+After the exact hydraulic preparation described above, Home Assistant has already entered `0x201`, sent `0x203` and confirmed `IR 0x22 = 0`.
 
-The UI guides the complete physical and software sequence:
+The calibration itself is then guided as follows:
 
-1. keep normal water circulation while AstralPool establishes persistent `0 %` electrolysis and enters `0x201`;
-2. only after the software confirms the cell is stopped, place the hydraulic valves in bypass and confirm that circulation no longer passes through the electrolyzer;
-3. remove and clean the pH probe, immerse it in pH 7 solution, gently agitate it and wait about 30 seconds for a stable value;
-4. validate the first point with `0x50D`; `IR 0x22 = 16` confirms that pH 7 was accepted and `0x201` remains active for the second point;
-5. clean the probe, immerse it in pH 4 solution, wait for stability and validate with `0x50E`;
-6. `IR 0x22 = 1` confirms success; the Smart Next releases `0x201`, so AstralPool immediately re-arms it while the cell is still bypassed;
-7. reinstall the probe, return the valves to normal, restore circulation through the electrolyzer and confirm each item in the UI;
-8. AstralPool restores logical flow supervision, verifies flow, releases `0x201`, then restores the previous production state.
+1. fully remove and clean the pH probe;
+2. immerse it in fresh pH 7 reference solution, gently agitate it and wait about 30 seconds for a stable reading;
+3. trigger `0x50D`; `IR 0x22 = 16` confirms that the pH 7 point was accepted and the calibration session remains active for the second point;
+4. rinse/clean the probe, immerse it in fresh pH 4 reference solution and wait again for stability;
+5. trigger `0x50E`; `IR 0x22 = 1` confirms a successful two-point calibration;
+6. the Smart Next normally releases `0x201` after the terminal result, so AstralPool immediately re-arms it while the electrolyzer section is still isolated.
 
-If `IR 0x22` returns E2/E3/4/5 or another terminal failure, the controller may release `0x201`. AstralPool immediately re-arms calibration mode and offers either a retry from pH 7 or a safe restoration of the installation. The persistent `0 %` production safety remains active throughout.
+If `IR 0x22` returns E2/E3/4/5 or another terminal failure, AstralPool re-arms `0x201` immediately and offers either a retry from the pH 7 point or a safe restoration of the installation. The persistent `0 %` production lock is never removed during this error handling.
 
 ### Guided Redox / ORP calibration
 
-The ORP workflow is validated with a **470 mV reference solution at approximately 25 °C**.
+After the same hydraulic preparation, Home Assistant starts `0x201`, clears the response with `0x203`, and confirms `IR 0x22 = 0`.
 
-The assistant:
+The ORP calibration is then performed with a **470 mV reference solution**, ideally around **25 °C**:
 
-1. establishes persistent `0 %` electrolysis and enters `0x201` while normal circulation is still present;
-2. asks the user to place the valves in bypass and confirm that the electrolyzer is isolated from circulation;
-3. asks the user to remove and clean the ORP probe, immerse it in the 470 mV solution and wait for a stable reading;
-4. triggers calibration with `0x80F`;
-5. reads `IR 0x22`; `1` means success and `2` is E2 when the detected value is too far from 470 mV;
-6. immediately re-arms `0x201` after any terminal response while the bypass remains active;
-7. restores the previous electrolysis state only after the probe, valves and circulation have been explicitly confirmed as normal again.
+1. fully remove and clean the ORP probe;
+2. immerse it in fresh 470 mV solution, gently agitate it and wait about 30 seconds for a stable reading;
+3. trigger `0x80F`;
+4. `IR 0x22 = 1` means success;
+5. `IR 0x22 = 2` is E2 when the measured value is too far from the expected 470 mV value;
+6. after any terminal result, AstralPool immediately re-arms `0x201` while the electrolyzer remains isolated.
+
+Other documented response codes are displayed to the user even though they do not need to be intentionally reproduced during hardware testing.
+
+### Exact hydraulic restoration — pH Standard and ORP
+
+Successful calibration and error recovery use the same controlled restoration sequence:
+
+1. reinstall the calibrated probe fully and tighten it correctly while filtration remains OFF and both isolation valves are still closed;
+2. fully **OPEN** the upstream/inlet valve;
+3. fully **OPEN** the downstream/outlet valve;
+4. **CLOSE** the electrolyzer bypass valve so the normal hydraulic path again passes through the electrolyzer;
+5. switch filtration **ON** and verify real water circulation through the electrolyzer;
+6. Home Assistant restores both logical flow inputs and checks the Smart Next flow alarm;
+7. only after flow is confirmed does Home Assistant release `0x201` and restore the saved electrolysis setpoint and production-control overrides.
+
+If normal flow is not confirmed, production remains at `0 %` and the restoration step stays blocked.
 
 ### Guided pH / ORP factory calibration reset
 
@@ -117,12 +162,13 @@ The factory calibration reset sequence is also validated on real hardware and do
 For pH (`0x50C`) and ORP (`0x80C`), Home Assistant executes:
 
 1. `0x201 = ON`;
-2. `0x203` to clear `IR 0x22` while calibration mode is active;
-3. trigger the relevant reset coil;
-4. read `IR 0x22` — `1` confirms success;
-5. the Smart Next normally releases `0x201` automatically after the terminal result.
+2. `0x203` to clear `IR 0x22`;
+3. verify `IR 0x22 = 0`;
+4. trigger the relevant reset coil;
+5. read `IR 0x22` — `1` confirms success;
+6. the Smart Next normally releases `0x201` automatically after the terminal result.
 
-Errors `2`, `3`, `4` and `5` are displayed to the user instead of being hidden.
+Errors `2`, `3`, `4` and `5` are shown to the user instead of being hidden.
 
 ### Guided temperature calibration
 

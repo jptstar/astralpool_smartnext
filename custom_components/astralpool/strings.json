@@ -39,10 +39,30 @@
       "maintenance_response_not_cleared": "The previous calibration result could not be cleared.",
       "maintenance_unsupported": "This maintenance procedure is not supported.",
       "maintenance_communication_failed": "Communication with the Smart Next failed during the maintenance procedure.",
-      "maintenance_failed": "The Smart Next maintenance procedure failed."
+      "maintenance_failed": "The Smart Next maintenance procedure failed.",
+      "ph_fast_ok": "Fast pH calibration completed successfully.",
+      "ph_standard_ok": "Two-point pH calibration completed successfully and the installation was restored.",
+      "orp_ok": "470 mV Redox / ORP calibration completed successfully and the installation was restored.",
+      "ph_reset_ok": "The factory pH calibration was restored successfully.",
+      "orp_reset_ok": "The factory Redox / ORP calibration was restored successfully."
     },
     "error": {
-      "confirmation_required": "Confirm the maintenance operation before continuing."
+      "confirmation_required": "Confirm the requested step before continuing.",
+      "calibration_communication_failed": "Communication with the Smart Next failed during calibration. Keep the installation in a safe state and retry only after communication is restored.",
+      "calibration_e2": "E2 — the detected value is too far from the expected calibration value.",
+      "calibration_e3": "E3 — the measurement is unstable. Clean the probe, gently agitate it in the reference solution and wait for a stable reading before retrying.",
+      "calibration_unavailable": "Calibration unavailable (IR 0x22 = 4). Check the current Smart Next state and retry.",
+      "calibration_initializing": "The sensor is still initializing (IR 0x22 = 5). Wait until it is ready before retrying.",
+      "calibration_mode_lost": "Calibration mode ended before a usable result was captured.",
+      "calibration_timeout": "No calibration response was received before the timeout.",
+      "calibration_failed": "The Smart Next returned an unexpected calibration result.",
+      "calibration_mode_not_active": "Calibration mode 0x201 could not be activated.",
+      "treatment_not_halted": "The Smart Next did not confirm Treatment halted after entering calibration mode.",
+      "calibration_response_not_cleared": "IR 0x22 could not be cleared while calibration mode was active.",
+      "electrolysis_not_stopped": "Electrolysis could not be verified fully stopped. The bypass step is blocked.",
+      "calibration_mode_rearm_failed": "Calibration mode 0x201 could not be re-armed after the Smart Next released it. Keep production at 0 % and restore the hydraulic installation immediately.",
+      "calibration_mode_rearm_too_slow": "Calibration mode remained inactive for 10 seconds or more. Keep production at 0 % and restore the hydraulic installation immediately.",
+      "flow_not_restored": "Normal water flow through the electrolyzer has not been confirmed. Production remains at 0 %; correct the valves/circulation and retry the restoration step."
     },
     "step": {
       "init": {
@@ -70,6 +90,99 @@
         "title": "Confirm maintenance procedure",
         "description": "The selected operation writes directly to the Smart Next over local Modbus. Calibration procedures temporarily stop water treatment while calibration mode is active. Confirm only if you want to execute the selected procedure now.",
         "data": {"confirm": "I understand and want to execute this procedure"}
+      },
+      "calibrate_sensor": {
+        "title": "Calibrate a Smart Next sensor",
+        "description": "Choose a hardware-validated calibration procedure. Salinity remains available only through the raw Calibration TEST entities until its sequence is validated."
+      },
+      "calibrate_ph": {
+        "title": "pH calibration",
+        "description": "Fast calibration corrects the installed probe from a trusted reference measurement. Standard calibration removes the probe and uses pH 7 then pH 4 reference solutions."
+      },
+      "calibrate_ph_fast": {
+        "title": "pH — Fast calibration",
+        "description": "Leave the pH probe installed and keep normal circulation running. Current Smart Next pH: {current_ph}. Enter a trusted reference pH. Home Assistant will activate 0x201, write reference ×100 to HR 0x22, trigger 0x50F and display the controller result.",
+        "data": {"reference_ph": "Trusted reference pH"}
+      },
+      "calibrate_ph_standard_prepare": {
+        "title": "pH Standard — 1/5 · Secure electrolysis",
+        "description": "Keep the valves in their NORMAL circulation position for this step. Home Assistant will save the current electrolysis/flow settings, disable known production overrides and logical flow inputs, force production to 0 %, verify production = 0, current = 0 and electrolysis stopped, then enter calibration mode 0x201. Do not operate the physical bypass until this step succeeds.",
+        "data": {"confirm": "Normal circulation is active; secure the Smart Next now"}
+      },
+      "calibrate_ph_standard_bypass": {
+        "title": "pH Standard — 2/5 · Place the cell on bypass",
+        "description": "Electrolysis has been verified stopped and calibration mode is active. Now position the valves so water bypasses the electrolyzer cell. Confirm only when circulation no longer passes through the cell. The software keeps a persistent 0 % production safety in addition to 0x201.",
+        "data": {"bypass_confirmed": "The electrolyzer is isolated and water is flowing through the bypass"}
+      },
+      "calibrate_ph_standard_ph7": {
+        "title": "pH Standard — 3/5 · pH 7 point",
+        "description": "Remove the pH probe, rinse/clean it, immerse it in fresh pH 7 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. When confirmed, Home Assistant triggers 0x50D. IR 0x22 = 16 means the first point was accepted and 0x201 remains active for pH 4.",
+        "data": {"stable": "Probe is clean, in pH 7 solution and the reading is stable"}
+      },
+      "calibrate_ph_standard_ph4": {
+        "title": "pH Standard — 4/5 · pH 4 point",
+        "description": "Rinse/clean the probe again, immerse it in fresh pH 4 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. Home Assistant then triggers 0x50E. IR 0x22 = 1 means success. The Smart Next normally releases 0x201 at this point; AstralPool immediately re-arms it while the cell is still bypassed.",
+        "data": {"stable": "Probe is clean, in pH 4 solution and the reading is stable"}
+      },
+      "calibrate_ph_standard_error": {
+        "title": "pH Standard — Calibration error",
+        "description": "Result: {error}. A terminal error can make the Smart Next release 0x201. AstralPool re-arms calibration mode immediately and keeps electrolysis independently forced to 0 %. You can restart from pH 7 or end the calibration and safely restore the installation."
+      },
+      "calibrate_ph_standard_restore": {
+        "title": "pH Standard — 5/5 · Restore the installation",
+        "description": "Before production can resume: reinstall the pH probe, return ALL bypass valves to normal so water circulates through the electrolyzer, and confirm circulation. Home Assistant will then restore logical flow supervision, verify flow, release 0x201 and only afterwards restore the previous production/override settings.",
+        "data": {
+          "probe_installed": "The pH probe is reinstalled correctly",
+          "valves_normal": "All bypass valves are back in normal operating position",
+          "circulation_restored": "Water circulation through the electrolyzer is restored"
+        }
+      },
+      "calibrate_orp_prepare": {
+        "title": "Redox / ORP — 1/4 · Secure electrolysis",
+        "description": "Keep the valves in their NORMAL circulation position. Home Assistant saves the current settings, disables known production overrides and logical flow inputs, forces production to 0 %, verifies production/current/running are zero, then enters calibration mode 0x201. Do not operate the bypass until this step succeeds.",
+        "data": {"confirm": "Normal circulation is active; secure the Smart Next now"}
+      },
+      "calibrate_orp_bypass": {
+        "title": "Redox / ORP — 2/4 · Place the cell on bypass",
+        "description": "Electrolysis has been verified stopped. Position the valves so circulation bypasses the electrolyzer cell and confirm only when the cell is isolated. A persistent 0 % production safety remains active independently of 0x201.",
+        "data": {"bypass_confirmed": "The electrolyzer is isolated and water is flowing through the bypass"}
+      },
+      "calibrate_orp_470": {
+        "title": "Redox / ORP — 3/4 · Calibrate at 470 mV",
+        "description": "Remove and clean the ORP probe. Immerse it in fresh 470 mV reference solution at approximately 25 °C, gently agitate it and wait about 30 seconds for a stable reading. Current reading: {current_orp} mV. Home Assistant triggers 0x80F. IR 0x22 = 1 means success. After any terminal result, AstralPool immediately re-arms 0x201 while the cell remains bypassed.",
+        "data": {"stable": "Probe is clean, in 470 mV solution and the reading is stable"}
+      },
+      "calibrate_orp_error": {
+        "title": "Redox / ORP — Calibration error",
+        "description": "Result: {error}. The Smart Next can release 0x201 after an error. AstralPool re-arms it immediately and keeps electrolysis independently forced to 0 %. You can retry at 470 mV or end the calibration and safely restore the installation."
+      },
+      "calibrate_orp_restore": {
+        "title": "Redox / ORP — 4/4 · Restore the installation",
+        "description": "Reinstall the ORP probe, return ALL bypass valves to normal, and restore water circulation through the electrolyzer. Home Assistant restores logical flow supervision and verifies flow before releasing 0x201 and restoring the previous electrolysis state.",
+        "data": {
+          "probe_installed": "The ORP probe is reinstalled correctly",
+          "valves_normal": "All bypass valves are back in normal operating position",
+          "circulation_restored": "Water circulation through the electrolyzer is restored"
+        }
+      },
+      "restore_calibration": {
+        "title": "Restore factory calibration",
+        "description": "Choose a hardware-validated sensor calibration reset."
+      },
+      "restore_ph_calibration": {
+        "title": "Restore factory pH calibration",
+        "description": "Keep the probe installed and normal circulation active. Home Assistant performs the validated sequence 0x201 ON → 0x203 → IR 0x22 = 0 → pH reset 0x50C. IR 0x22 = 1 confirms success and the Smart Next normally releases 0x201 automatically.",
+        "data": {"confirm": "Restore the factory pH calibration now"}
+      },
+      "restore_orp_calibration": {
+        "title": "Restore factory Redox / ORP calibration",
+        "description": "Keep the probe installed and normal circulation active. Home Assistant performs the validated sequence 0x201 ON → 0x203 → IR 0x22 = 0 → ORP reset 0x80C. IR 0x22 = 1 confirms success and the Smart Next normally releases 0x201 automatically.",
+        "data": {"confirm": "Restore the factory Redox / ORP calibration now"}
+      },
+      "calibrate_temperature": {
+        "title": "Temperature calibration",
+        "description": "Enter the trusted reference water temperature. The validated sequence writes reference ×10 to HR 0x22, triggers 0xB0F and waits 5 seconds.",
+        "data": {"temperature": "Reference temperature"}
       }
     }
   },

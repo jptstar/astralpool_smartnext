@@ -39,10 +39,30 @@
       "maintenance_response_not_cleared": "L’ancien résultat de calibration n’a pas pu être effacé.",
       "maintenance_unsupported": "Cette procédure de maintenance n’est pas prise en charge.",
       "maintenance_communication_failed": "La communication avec le Smart Next a échoué pendant la procédure de maintenance.",
-      "maintenance_failed": "La procédure de maintenance Smart Next a échoué."
+      "maintenance_failed": "La procédure de maintenance Smart Next a échoué.",
+      "ph_fast_ok": "La calibration rapide du pH s’est terminée avec succès.",
+      "ph_standard_ok": "La calibration pH standard à deux points s’est terminée avec succès et l’installation a été rétablie.",
+      "orp_ok": "La calibration Redox / ORP à 470 mV s’est terminée avec succès et l’installation a été rétablie.",
+      "ph_reset_ok": "La calibration usine du pH a été restaurée avec succès.",
+      "orp_reset_ok": "La calibration usine Redox / ORP a été restaurée avec succès."
     },
     "error": {
-      "confirmation_required": "Confirmez l’opération de maintenance avant de continuer."
+      "confirmation_required": "Confirmez l’étape demandée avant de continuer.",
+      "calibration_communication_failed": "La communication avec le Smart Next a échoué pendant la calibration. Maintenez l’installation en état sûr et ne reprenez qu’après rétablissement de la communication.",
+      "calibration_e2": "E2 — la valeur détectée est trop éloignée de la valeur de calibration attendue.",
+      "calibration_e3": "E3 — la mesure est instable. Nettoyez la sonde, agitez-la doucement dans la solution étalon et attendez une valeur stable avant de réessayer.",
+      "calibration_unavailable": "Calibration indisponible (IR 0x22 = 4). Vérifiez l’état actuel du Smart Next puis réessayez.",
+      "calibration_initializing": "Le capteur est encore en initialisation (IR 0x22 = 5). Attendez qu’il soit prêt avant de réessayer.",
+      "calibration_mode_lost": "Le mode calibration s’est terminé avant qu’une réponse exploitable ait pu être capturée.",
+      "calibration_timeout": "Aucune réponse de calibration n’a été reçue avant l’expiration du délai.",
+      "calibration_failed": "Le Smart Next a renvoyé un résultat de calibration inattendu.",
+      "calibration_mode_not_active": "Le mode calibration 0x201 n’a pas pu être activé.",
+      "treatment_not_halted": "Le Smart Next n’a pas confirmé l’arrêt du traitement après l’entrée en mode calibration.",
+      "calibration_response_not_cleared": "IR 0x22 n’a pas pu être remis à zéro alors que le mode calibration était actif.",
+      "electrolysis_not_stopped": "L’arrêt complet de l’électrolyse n’a pas pu être confirmé. La procédure hydraulique est bloquée.",
+      "calibration_mode_rearm_failed": "Le mode calibration 0x201 n’a pas pu être réarmé après sa désactivation par le Smart Next. La production reste forcée à 0 %. Rétablissez immédiatement l’installation hydraulique.",
+      "calibration_mode_rearm_too_slow": "Le mode calibration est resté désactivé pendant 10 secondes ou plus. La production reste forcée à 0 %. Rétablissez immédiatement l’installation hydraulique.",
+      "flow_not_restored": "Le débit normal à travers l’électrolyseur n’est pas confirmé. La production reste à 0 % ; corrigez les vannes/la circulation puis relancez l’étape finale de rétablissement."
     },
     "step": {
       "init": {
@@ -68,8 +88,183 @@
       },
       "maintenance_confirm": {
         "title": "Confirmer la procédure de maintenance",
-        "description": "L’opération sélectionnée écrit directement dans le Smart Next en Modbus local. Les procédures de calibration arrêtent temporairement le traitement de l’eau tant que le mode calibration est actif. Confirmez uniquement si vous souhaitez exécuter maintenant la procédure sélectionnée.",
+        "description": "L’opération sélectionnée écrit directement dans le Smart Next en Modbus local. Confirmez uniquement si vous souhaitez exécuter maintenant la procédure sélectionnée.",
         "data": {"confirm": "Je comprends et je souhaite exécuter cette procédure"}
+      },
+      "calibrate_sensor": {
+        "title": "Calibrer un capteur Smart Next",
+        "description": "Choisissez une procédure de calibration validée sur matériel réel. La salinité reste disponible uniquement via les entités brutes Calibration TEST tant que sa séquence n’est pas validée."
+      },
+      "calibrate_ph": {
+        "title": "Calibration pH",
+        "description": "La calibration Rapide corrige la sonde installée à partir d’une mesure de référence fiable. La calibration Standard nécessite de retirer la sonde et utilise successivement les solutions pH 7 puis pH 4."
+      },
+      "calibrate_ph_fast": {
+        "title": "pH — Calibration rapide",
+        "description": "Laissez la sonde pH installée et conservez la circulation normale. pH actuel du Smart Next : {current_ph}. Saisissez une valeur pH de référence fiable. Home Assistant active 0x201, efface IR 0x22 avec 0x203, écrit référence ×100 dans HR 0x22, déclenche 0x50F puis affiche le résultat.",
+        "data": {"reference_ph": "pH de référence fiable"}
+      },
+      "calibrate_ph_standard_prepare": {
+        "title": "pH Standard — Sécurité logicielle",
+        "description": "Conservez la filtration EN MARCHE et toutes les vannes en position de fonctionnement NORMALE. Avant toute manipulation hydraulique, Home Assistant mémorise l’état du Smart Next, désactive les deux capteurs de débit logiques et les commandes connues susceptibles de relancer l’électrolyse, force la production normale à 0 %, puis vérifie production = 0, courant = 0 et électrolyse arrêtée. Le mode calibration 0x201 n’est PAS encore activé.",
+        "data": {"confirm": "La circulation est normale ; sécuriser l’électrolyse à 0 %"}
+      },
+      "calibrate_ph_standard_filtration_off": {
+        "title": "pH Standard — Préparation 1/6 · Arrêter la filtration",
+        "description": "ÉTEIGNEZ la pompe de filtration. Vérifiez physiquement qu’elle est bien arrêtée avant de valider cette étape. L’électrolyse reste indépendamment forcée à 0 % par AstralPool.",
+        "data": {"filtration_off": "La pompe de filtration est ÉTEINTE et j’ai vérifié son arrêt"}
+      },
+      "calibrate_ph_standard_bypass_open": {
+        "title": "pH Standard — Préparation 2/6 · Ouvrir le bypass",
+        "description": "OUVREZ complètement la vanne de bypass de l’électrolyseur, puis validez.",
+        "data": {"bypass_open": "La vanne de bypass de l’électrolyseur est OUVERTE"}
+      },
+      "calibrate_ph_standard_inlet_closed": {
+        "title": "pH Standard — Préparation 3/6 · Fermer la vanne amont",
+        "description": "FERMEZ la vanne située en amont de l’électrolyseur, côté sondes / entrée de l’électrolyseur, puis validez.",
+        "data": {"inlet_closed": "La vanne amont / entrée est FERMÉE"}
+      },
+      "calibrate_ph_standard_outlet_closed": {
+        "title": "pH Standard — Préparation 4/6 · Fermer la vanne aval",
+        "description": "FERMEZ la vanne située en aval, à la sortie de l’électrolyseur, puis validez. La partie électrolyseur est maintenant isolée entre les deux vannes fermées.",
+        "data": {"outlet_closed": "La vanne aval / sortie est FERMÉE"}
+      },
+      "calibrate_ph_standard_probe_loosened": {
+        "title": "pH Standard — Préparation 5/6 · Desserrer la sonde pH",
+        "description": "DÉVISSEZ légèrement la sonde pH que vous allez démonter. Ne la retirez pas encore complètement. Validez lorsqu’elle est seulement desserrée.",
+        "data": {"probe_loosened": "La sonde pH est légèrement desserrée mais toujours en place"}
+      },
+      "calibrate_ph_standard_drain_pulse": {
+        "title": "pH Standard — Préparation 6/6 · Faire baisser le niveau d’eau",
+        "description": "OUVREZ très légèrement la vanne aval / sortie pendant au maximum 2 secondes afin de laisser entrer un peu d’air dans la partie isolée et faire baisser le niveau d’eau, puis REFERMEZ-LA immédiatement. Ne la laissez jamais ouverte plus de 2 secondes. Validez uniquement lorsque la vanne aval est de nouveau FERMÉE. Home Assistant lancera ensuite la session validée : 0x201 ON → 0x203 → IR 0x22 = 0.",
+        "data": {"drain_done": "J’ai ouvert la vanne aval au maximum 2 secondes et elle est de nouveau FERMÉE"}
+      },
+      "calibrate_ph_standard_ph7": {
+        "title": "pH Standard — Calibration 1/2 · pH 7",
+        "description": "Le mode calibration est actif et IR 0x22 a été effacé. Vous pouvez maintenant retirer complètement la sonde pH, la rincer/nettoyer, la plonger dans une solution étalon pH 7 fraîche, l’agiter doucement puis attendre environ 30 secondes jusqu’à stabilisation. Mesure actuelle : {current_ph}. Validez pour déclencher 0x50D. IR 0x22 = 16 confirme que le premier point est accepté et 0x201 reste actif pour le pH 4.",
+        "data": {"stable": "La sonde est propre, dans la solution pH 7 et la valeur est stable"}
+      },
+      "calibrate_ph_standard_ph4": {
+        "title": "pH Standard — Calibration 2/2 · pH 4",
+        "description": "Rincez/nettoyez à nouveau la sonde, plongez-la dans une solution étalon pH 4 fraîche, agitez-la doucement puis attendez environ 30 secondes jusqu’à stabilisation. Mesure actuelle : {current_ph}. Validez pour déclencher 0x50E. IR 0x22 = 1 confirme le succès. Le Smart Next désactive normalement 0x201 à cet instant ; AstralPool le réarme immédiatement tant que l’électrolyseur isolé n’a pas été rétabli.",
+        "data": {"stable": "La sonde est propre, dans la solution pH 4 et la valeur est stable"}
+      },
+      "calibrate_ph_standard_error": {
+        "title": "pH Standard — Erreur de calibration",
+        "description": "Résultat : {error}. Une erreur terminale peut désactiver 0x201 et autoriser la reprise de production. AstralPool réarme donc immédiatement 0x201 et maintient en parallèle le verrouillage indépendant de la production à 0 %. Le mode calibration ne doit pas rester désactivé pendant 10 secondes. Vous pouvez recommencer depuis pH 7 ou rétablir l’installation en sécurité."
+      },
+      "calibrate_ph_standard_restore": {
+        "title": "pH Standard — Rétablissement 1/5 · Remettre la sonde",
+        "description": "Rincez la sonde pH si nécessaire, remettez-la complètement en place et serrez-la correctement pendant que les deux vannes d’isolement de l’électrolyseur restent fermées et que la filtration reste ÉTEINTE.",
+        "data": {"probe_installed": "La sonde pH est complètement remise en place et serrée"}
+      },
+      "calibrate_ph_standard_restore_inlet": {
+        "title": "pH Standard — Rétablissement 2/5 · Ouvrir la vanne amont",
+        "description": "Filtration toujours ÉTEINTE et bypass toujours OUVERT : OUVREZ complètement la vanne amont / entrée de l’électrolyseur.",
+        "data": {"inlet_open": "La vanne amont / entrée est OUVERTE"}
+      },
+      "calibrate_ph_standard_restore_outlet": {
+        "title": "pH Standard — Rétablissement 3/5 · Ouvrir la vanne aval",
+        "description": "OUVREZ complètement la vanne aval / sortie de l’électrolyseur. Les deux vannes d’isolement doivent maintenant être ouvertes.",
+        "data": {"outlet_open": "La vanne aval / sortie est OUVERTE"}
+      },
+      "calibrate_ph_standard_restore_bypass": {
+        "title": "pH Standard — Rétablissement 4/5 · Fermer le bypass",
+        "description": "FERMEZ la vanne de bypass de l’électrolyseur afin de remettre le circuit hydraulique dans son chemin de fonctionnement normal à travers l’électrolyseur.",
+        "data": {"bypass_closed": "La vanne de bypass est FERMÉE et le circuit hydraulique est normal"}
+      },
+      "calibrate_ph_standard_restore_filtration": {
+        "title": "pH Standard — Rétablissement 5/5 · Redémarrer la filtration",
+        "description": "REMETTEZ la pompe de filtration EN MARCHE et vérifiez qu’elle tourne réellement et que l’eau circule à travers l’électrolyseur. Après confirmation, Home Assistant réactive les capteurs de débit logiques, vérifie le débit Smart Next, libère 0x201 et seulement ensuite restaure les anciens réglages d’électrolyse.",
+        "data": {"filtration_on": "La filtration est EN MARCHE et la circulation à travers l’électrolyseur est confirmée"}
+      },
+      "calibrate_orp_prepare": {
+        "title": "Redox / ORP — Sécurité logicielle",
+        "description": "Conservez la filtration EN MARCHE et toutes les vannes en position NORMALE. Home Assistant mémorise d’abord l’état du Smart Next, désactive les capteurs de débit logiques et les commandes connues susceptibles de relancer l’électrolyse, force la production normale à 0 %, puis vérifie production = 0, courant = 0 et électrolyse arrêtée. Le mode calibration 0x201 n’est PAS encore activé.",
+        "data": {"confirm": "La circulation est normale ; sécuriser l’électrolyse à 0 %"}
+      },
+      "calibrate_orp_filtration_off": {
+        "title": "Redox / ORP — Préparation 1/6 · Arrêter la filtration",
+        "description": "ÉTEIGNEZ la pompe de filtration. Vérifiez physiquement qu’elle est bien arrêtée avant de valider.",
+        "data": {"filtration_off": "La pompe de filtration est ÉTEINTE et j’ai vérifié son arrêt"}
+      },
+      "calibrate_orp_bypass_open": {
+        "title": "Redox / ORP — Préparation 2/6 · Ouvrir le bypass",
+        "description": "OUVREZ complètement la vanne de bypass de l’électrolyseur, puis validez.",
+        "data": {"bypass_open": "La vanne de bypass de l’électrolyseur est OUVERTE"}
+      },
+      "calibrate_orp_inlet_closed": {
+        "title": "Redox / ORP — Préparation 3/6 · Fermer la vanne amont",
+        "description": "FERMEZ la vanne située en amont de l’électrolyseur, côté sondes / entrée de l’électrolyseur, puis validez.",
+        "data": {"inlet_closed": "La vanne amont / entrée est FERMÉE"}
+      },
+      "calibrate_orp_outlet_closed": {
+        "title": "Redox / ORP — Préparation 4/6 · Fermer la vanne aval",
+        "description": "FERMEZ la vanne située en aval, à la sortie de l’électrolyseur, puis validez. La partie électrolyseur est maintenant isolée.",
+        "data": {"outlet_closed": "La vanne aval / sortie est FERMÉE"}
+      },
+      "calibrate_orp_probe_loosened": {
+        "title": "Redox / ORP — Préparation 5/6 · Desserrer la sonde ORP",
+        "description": "DÉVISSEZ légèrement la sonde ORP. Ne la retirez pas encore complètement. Validez lorsqu’elle est seulement desserrée.",
+        "data": {"probe_loosened": "La sonde ORP est légèrement desserrée mais toujours en place"}
+      },
+      "calibrate_orp_drain_pulse": {
+        "title": "Redox / ORP — Préparation 6/6 · Faire baisser le niveau d’eau",
+        "description": "OUVREZ très légèrement la vanne aval / sortie pendant au maximum 2 secondes afin de laisser entrer un peu d’air et faire baisser le niveau d’eau, puis REFERMEZ-LA immédiatement. Ne la laissez jamais ouverte plus de 2 secondes. Validez uniquement lorsque la vanne aval est de nouveau FERMÉE. Home Assistant lancera ensuite 0x201 ON → 0x203 → IR 0x22 = 0.",
+        "data": {"drain_done": "J’ai ouvert la vanne aval au maximum 2 secondes et elle est de nouveau FERMÉE"}
+      },
+      "calibrate_orp_470": {
+        "title": "Redox / ORP — Calibration à 470 mV",
+        "description": "Le mode calibration est actif et IR 0x22 a été effacé. Retirez complètement et nettoyez la sonde ORP. Plongez-la dans une solution étalon fraîche à 470 mV, idéalement autour de 25 °C, agitez-la doucement puis attendez environ 30 secondes jusqu’à stabilisation. Mesure actuelle : {current_orp} mV. Validez pour déclencher 0x80F. IR 0x22 = 1 signifie succès. AstralPool réarme immédiatement 0x201 après tout résultat terminal tant que l’électrolyseur reste isolé.",
+        "data": {"stable": "La sonde est propre, dans la solution 470 mV et la valeur est stable"}
+      },
+      "calibrate_orp_error": {
+        "title": "Redox / ORP — Erreur de calibration",
+        "description": "Résultat : {error}. Une erreur terminale peut désactiver 0x201. AstralPool le réarme immédiatement et maintient indépendamment l’électrolyse forcée à 0 %. Le mode calibration ne doit pas rester désactivé pendant 10 secondes. Vous pouvez réessayer à 470 mV ou rétablir l’installation en sécurité."
+      },
+      "calibrate_orp_restore": {
+        "title": "Redox / ORP — Rétablissement 1/5 · Remettre la sonde",
+        "description": "Rincez la sonde ORP si nécessaire, remettez-la complètement en place et serrez-la correctement pendant que les deux vannes d’isolement restent fermées et que la filtration reste ÉTEINTE.",
+        "data": {"probe_installed": "La sonde ORP est complètement remise en place et serrée"}
+      },
+      "calibrate_orp_restore_inlet": {
+        "title": "Redox / ORP — Rétablissement 2/5 · Ouvrir la vanne amont",
+        "description": "Filtration toujours ÉTEINTE et bypass toujours OUVERT : OUVREZ complètement la vanne amont / entrée.",
+        "data": {"inlet_open": "La vanne amont / entrée est OUVERTE"}
+      },
+      "calibrate_orp_restore_outlet": {
+        "title": "Redox / ORP — Rétablissement 3/5 · Ouvrir la vanne aval",
+        "description": "OUVREZ complètement la vanne aval / sortie. Les deux vannes d’isolement de l’électrolyseur doivent maintenant être ouvertes.",
+        "data": {"outlet_open": "La vanne aval / sortie est OUVERTE"}
+      },
+      "calibrate_orp_restore_bypass": {
+        "title": "Redox / ORP — Rétablissement 4/5 · Fermer le bypass",
+        "description": "FERMEZ la vanne de bypass de l’électrolyseur afin que le circuit hydraulique repasse par l’électrolyseur.",
+        "data": {"bypass_closed": "La vanne de bypass est FERMÉE et le circuit hydraulique est normal"}
+      },
+      "calibrate_orp_restore_filtration": {
+        "title": "Redox / ORP — Rétablissement 5/5 · Redémarrer la filtration",
+        "description": "REMETTEZ la pompe de filtration EN MARCHE et vérifiez la circulation réelle à travers l’électrolyseur. Home Assistant réactive ensuite les capteurs de débit logiques, vérifie le débit Smart Next, libère 0x201 et seulement après restaure l’ancien état d’électrolyse.",
+        "data": {"filtration_on": "La filtration est EN MARCHE et la circulation à travers l’électrolyseur est confirmée"}
+      },
+      "restore_calibration": {
+        "title": "Restaurer la calibration d’usine",
+        "description": "Choisissez un reset de calibration validé sur matériel réel."
+      },
+      "restore_ph_calibration": {
+        "title": "Restaurer la calibration usine du pH",
+        "description": "Laissez la sonde installée et conservez la circulation normale. Home Assistant exécute la séquence validée 0x201 ON → 0x203 → IR 0x22 = 0 → reset pH 0x50C. IR 0x22 = 1 confirme le succès et le Smart Next désactive normalement 0x201 automatiquement.",
+        "data": {"confirm": "Restaurer maintenant la calibration usine du pH"}
+      },
+      "restore_orp_calibration": {
+        "title": "Restaurer la calibration usine Redox / ORP",
+        "description": "Laissez la sonde installée et conservez la circulation normale. Home Assistant exécute la séquence validée 0x201 ON → 0x203 → IR 0x22 = 0 → reset ORP 0x80C. IR 0x22 = 1 confirme le succès et le Smart Next désactive normalement 0x201 automatiquement.",
+        "data": {"confirm": "Restaurer maintenant la calibration usine Redox / ORP"}
+      },
+      "calibrate_temperature": {
+        "title": "Calibration température",
+        "description": "Saisissez la température d’eau de référence fiable. La séquence validée écrit référence ×10 dans HR 0x22, déclenche 0xB0F puis attend 5 secondes.",
+        "data": {"temperature": "Température de référence"}
       }
     }
   },

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+
 import voluptuous as vol
 
 from homeassistant.helpers.selector import (
@@ -22,6 +24,7 @@ from .guided_calibration import (
     RESPONSE_UNAVAILABLE,
     CalibrationSavedState,
     GuidedCalibrationError,
+    async_begin_bypassed_calibration,
     async_calibrate_ph_fast,
     async_prepare_bypassed_calibration,
     async_rearm_calibration_mode,
@@ -94,6 +97,27 @@ class SmartNextGuidedCalibrationOptionsMixin:
             return response
         return f"Unexpected IR 0x22 response: {response}"
 
+    async def _async_confirmation_step(
+        self,
+        *,
+        step_id: str,
+        field: str,
+        user_input,
+        next_step: Callable[[], Awaitable],
+    ):
+        """Render one explicit manual confirmation before moving to the next step."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(field, False):
+                errors["base"] = "confirmation_required"
+            else:
+                return await next_step()
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=vol.Schema({vol.Required(field, default=False): bool}),
+            errors=errors,
+        )
+
     async def async_step_calibrate_sensor(self, user_input=None):
         """Choose one hardware-validated sensor calibration assistant."""
         menu: dict[str, str] = {}
@@ -156,8 +180,12 @@ class SmartNextGuidedCalibrationOptionsMixin:
             description_placeholders={"current_ph": f"{default_ph:.2f}"},
         )
 
+    # ---------------------------------------------------------------------
+    # pH Standard — persistent software safety, then exact hydraulic steps
+    # ---------------------------------------------------------------------
+
     async def async_step_calibrate_ph_standard_prepare(self, user_input=None):
-        """Stop production and enter 0x201 before the user operates the bypass."""
+        """Force persistent 0 % electrolysis before any physical manipulation."""
         if not self._ph_available():
             return self.async_abort(reason="maintenance_unsupported")
         errors: dict[str, str] = {}
@@ -175,28 +203,86 @@ class SmartNextGuidedCalibrationOptionsMixin:
                 except GuidedCalibrationError as err:
                     errors["base"] = err.reason
                 else:
-                    return await self.async_step_calibrate_ph_standard_bypass()
+                    return await self.async_step_calibrate_ph_standard_filtration_off()
         return self.async_show_form(
             step_id="calibrate_ph_standard_prepare",
             data_schema=vol.Schema({vol.Required("confirm", default=False): bool}),
             errors=errors,
         )
 
-    async def async_step_calibrate_ph_standard_bypass(self, user_input=None):
-        """Require confirmation that the electrolyzer cell is physically bypassed."""
+    async def async_step_calibrate_ph_standard_filtration_off(self, user_input=None):
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_filtration_off",
+            field="filtration_off",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_bypass_open,
+        )
+
+    async def async_step_calibrate_ph_standard_bypass_open(self, user_input=None):
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_bypass_open",
+            field="bypass_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_inlet_closed,
+        )
+
+    async def async_step_calibrate_ph_standard_inlet_closed(self, user_input=None):
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_inlet_closed",
+            field="inlet_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_outlet_closed,
+        )
+
+    async def async_step_calibrate_ph_standard_outlet_closed(self, user_input=None):
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_outlet_closed",
+            field="outlet_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_probe_loosened,
+        )
+
+    async def async_step_calibrate_ph_standard_probe_loosened(self, user_input=None):
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_probe_loosened",
+            field="probe_loosened",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_drain_pulse,
+        )
+
+    async def async_step_calibrate_ph_standard_drain_pulse(self, user_input=None):
+        """Confirm the <=2 s outlet-valve pulse, then start 201 -> 203."""
         if self._ph_saved_state is None:
             return await self.async_step_calibrate_ph_standard_prepare()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if not user_input.get("bypass_confirmed", False):
+            if not user_input.get("drain_done", False):
                 errors["base"] = "confirmation_required"
             else:
-                return await self.async_step_calibrate_ph_standard_ph7()
+                try:
+                    await async_begin_bypassed_calibration(
+                        self._config_entry.runtime_data.api
+                    )
+                    await self._config_entry.runtime_data.async_request_refresh()
+                except (SmartNextCommunicationError, OSError, TimeoutError):
+                    errors["base"] = "calibration_communication_failed"
+                except GuidedCalibrationError as err:
+                    errors["base"] = err.reason
+                else:
+                    return await self.async_step_calibrate_ph_standard_ph7()
         return self.async_show_form(
-            step_id="calibrate_ph_standard_bypass",
-            data_schema=vol.Schema(
-                {vol.Required("bypass_confirmed", default=False): bool}
-            ),
+            step_id="calibrate_ph_standard_drain_pulse",
+            data_schema=vol.Schema({vol.Required("drain_done", default=False): bool}),
             errors=errors,
         )
 
@@ -290,7 +376,6 @@ class SmartNextGuidedCalibrationOptionsMixin:
         )
 
     async def async_step_calibrate_ph_standard_retry(self, user_input=None):
-        """Clear the failed two-point session while keeping 0x201 active."""
         if self._ph_saved_state is None:
             return await self.async_step_calibrate_ph_standard_prepare()
         try:
@@ -306,16 +391,47 @@ class SmartNextGuidedCalibrationOptionsMixin:
         self._ph_last_error = None
         return await self.async_step_calibrate_ph_standard_ph7()
 
+    # Reverse the hydraulic sequence before restoring logical flow + production.
     async def async_step_calibrate_ph_standard_restore(self, user_input=None):
-        """Restore pH probe, hydraulics and then the saved production state."""
+        if self._ph_saved_state is None:
+            return await self.async_step_calibrate_ph_standard_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_restore",
+            field="probe_installed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_restore_inlet,
+        )
+
+    async def async_step_calibrate_ph_standard_restore_inlet(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_restore_inlet",
+            field="inlet_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_restore_outlet,
+        )
+
+    async def async_step_calibrate_ph_standard_restore_outlet(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_restore_outlet",
+            field="outlet_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_restore_bypass,
+        )
+
+    async def async_step_calibrate_ph_standard_restore_bypass(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_ph_standard_restore_bypass",
+            field="bypass_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_ph_standard_restore_filtration,
+        )
+
+    async def async_step_calibrate_ph_standard_restore_filtration(self, user_input=None):
         if self._ph_saved_state is None:
             return await self.async_step_calibrate_ph_standard_prepare()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if not all(
-                user_input.get(key, False)
-                for key in ("probe_installed", "valves_normal", "circulation_restored")
-            ):
+            if not user_input.get("filtration_on", False):
                 errors["base"] = "confirmation_required"
             else:
                 try:
@@ -333,19 +449,17 @@ class SmartNextGuidedCalibrationOptionsMixin:
                     self._ph_last_error = None
                     return self.async_abort(reason="ph_standard_ok")
         return self.async_show_form(
-            step_id="calibrate_ph_standard_restore",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("probe_installed", default=False): bool,
-                    vol.Required("valves_normal", default=False): bool,
-                    vol.Required("circulation_restored", default=False): bool,
-                }
-            ),
+            step_id="calibrate_ph_standard_restore_filtration",
+            data_schema=vol.Schema({vol.Required("filtration_on", default=False): bool}),
             errors=errors,
         )
 
+    # ---------------------------------------------------------------------
+    # ORP — same exact hydraulic preparation / restoration sequence
+    # ---------------------------------------------------------------------
+
     async def async_step_calibrate_orp_prepare(self, user_input=None):
-        """Stop production and enter 0x201 before ORP probe removal."""
+        """Force persistent 0 % electrolysis before any physical manipulation."""
         if not self._orp_available():
             return self.async_abort(reason="maintenance_unsupported")
         errors: dict[str, str] = {}
@@ -363,28 +477,78 @@ class SmartNextGuidedCalibrationOptionsMixin:
                 except GuidedCalibrationError as err:
                     errors["base"] = err.reason
                 else:
-                    return await self.async_step_calibrate_orp_bypass()
+                    return await self.async_step_calibrate_orp_filtration_off()
         return self.async_show_form(
             step_id="calibrate_orp_prepare",
             data_schema=vol.Schema({vol.Required("confirm", default=False): bool}),
             errors=errors,
         )
 
-    async def async_step_calibrate_orp_bypass(self, user_input=None):
-        """Require physical bypass confirmation before ORP probe removal."""
+    async def async_step_calibrate_orp_filtration_off(self, user_input=None):
+        if self._orp_saved_state is None:
+            return await self.async_step_calibrate_orp_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_filtration_off",
+            field="filtration_off",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_bypass_open,
+        )
+
+    async def async_step_calibrate_orp_bypass_open(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_bypass_open",
+            field="bypass_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_inlet_closed,
+        )
+
+    async def async_step_calibrate_orp_inlet_closed(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_inlet_closed",
+            field="inlet_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_outlet_closed,
+        )
+
+    async def async_step_calibrate_orp_outlet_closed(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_outlet_closed",
+            field="outlet_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_probe_loosened,
+        )
+
+    async def async_step_calibrate_orp_probe_loosened(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_probe_loosened",
+            field="probe_loosened",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_drain_pulse,
+        )
+
+    async def async_step_calibrate_orp_drain_pulse(self, user_input=None):
+        """Confirm the <=2 s outlet-valve pulse, then start 201 -> 203."""
         if self._orp_saved_state is None:
             return await self.async_step_calibrate_orp_prepare()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if not user_input.get("bypass_confirmed", False):
+            if not user_input.get("drain_done", False):
                 errors["base"] = "confirmation_required"
             else:
-                return await self.async_step_calibrate_orp_470()
+                try:
+                    await async_begin_bypassed_calibration(
+                        self._config_entry.runtime_data.api
+                    )
+                    await self._config_entry.runtime_data.async_request_refresh()
+                except (SmartNextCommunicationError, OSError, TimeoutError):
+                    errors["base"] = "calibration_communication_failed"
+                except GuidedCalibrationError as err:
+                    errors["base"] = err.reason
+                else:
+                    return await self.async_step_calibrate_orp_470()
         return self.async_show_form(
-            step_id="calibrate_orp_bypass",
-            data_schema=vol.Schema(
-                {vol.Required("bypass_confirmed", default=False): bool}
-            ),
+            step_id="calibrate_orp_drain_pulse",
+            data_schema=vol.Schema({vol.Required("drain_done", default=False): bool}),
             errors=errors,
         )
 
@@ -423,7 +587,6 @@ class SmartNextGuidedCalibrationOptionsMixin:
         )
 
     async def async_step_calibrate_orp_error(self, user_input=None):
-        """Keep 0x201 active after ORP failure and offer retry or safe restoration."""
         if self._orp_saved_state is None:
             return await self.async_step_calibrate_orp_prepare()
         try:
@@ -440,7 +603,6 @@ class SmartNextGuidedCalibrationOptionsMixin:
         )
 
     async def async_step_calibrate_orp_retry(self, user_input=None):
-        """Clear ORP error while keeping the bypass protected by 0x201."""
         if self._orp_saved_state is None:
             return await self.async_step_calibrate_orp_prepare()
         try:
@@ -455,15 +617,45 @@ class SmartNextGuidedCalibrationOptionsMixin:
         return await self.async_step_calibrate_orp_470()
 
     async def async_step_calibrate_orp_restore(self, user_input=None):
-        """Restore ORP probe, hydraulics and finally the previous production state."""
+        if self._orp_saved_state is None:
+            return await self.async_step_calibrate_orp_prepare()
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_restore",
+            field="probe_installed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_restore_inlet,
+        )
+
+    async def async_step_calibrate_orp_restore_inlet(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_restore_inlet",
+            field="inlet_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_restore_outlet,
+        )
+
+    async def async_step_calibrate_orp_restore_outlet(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_restore_outlet",
+            field="outlet_open",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_restore_bypass,
+        )
+
+    async def async_step_calibrate_orp_restore_bypass(self, user_input=None):
+        return await self._async_confirmation_step(
+            step_id="calibrate_orp_restore_bypass",
+            field="bypass_closed",
+            user_input=user_input,
+            next_step=self.async_step_calibrate_orp_restore_filtration,
+        )
+
+    async def async_step_calibrate_orp_restore_filtration(self, user_input=None):
         if self._orp_saved_state is None:
             return await self.async_step_calibrate_orp_prepare()
         errors: dict[str, str] = {}
         if user_input is not None:
-            if not all(
-                user_input.get(key, False)
-                for key in ("probe_installed", "valves_normal", "circulation_restored")
-            ):
+            if not user_input.get("filtration_on", False):
                 errors["base"] = "confirmation_required"
             else:
                 try:
@@ -481,19 +673,16 @@ class SmartNextGuidedCalibrationOptionsMixin:
                     self._orp_last_error = None
                     return self.async_abort(reason="orp_ok")
         return self.async_show_form(
-            step_id="calibrate_orp_restore",
-            data_schema=vol.Schema(
-                {
-                    vol.Required("probe_installed", default=False): bool,
-                    vol.Required("valves_normal", default=False): bool,
-                    vol.Required("circulation_restored", default=False): bool,
-                }
-            ),
+            step_id="calibrate_orp_restore_filtration",
+            data_schema=vol.Schema({vol.Required("filtration_on", default=False): bool}),
             errors=errors,
         )
 
+    # ---------------------------------------------------------------------
+    # Hardware-validated pH / ORP factory calibration resets
+    # ---------------------------------------------------------------------
+
     async def async_step_restore_ph_calibration(self, user_input=None):
-        """Restore factory pH calibration with the validated 201/203/reset sequence."""
         if not self._ph_available():
             return self.async_abort(reason="maintenance_unsupported")
         errors: dict[str, str] = {}
@@ -521,7 +710,6 @@ class SmartNextGuidedCalibrationOptionsMixin:
         )
 
     async def async_step_restore_orp_calibration(self, user_input=None):
-        """Restore factory ORP calibration with the validated 201/203/reset sequence."""
         if not self._orp_available():
             return self.async_abort(reason="maintenance_unsupported")
         errors: dict[str, str] = {}

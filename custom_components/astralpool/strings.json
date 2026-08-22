@@ -59,10 +59,10 @@
       "calibration_mode_not_active": "Calibration mode 0x201 could not be activated.",
       "treatment_not_halted": "The Smart Next did not confirm Treatment halted after entering calibration mode.",
       "calibration_response_not_cleared": "IR 0x22 could not be cleared while calibration mode was active.",
-      "electrolysis_not_stopped": "Electrolysis could not be verified fully stopped. The bypass step is blocked.",
-      "calibration_mode_rearm_failed": "Calibration mode 0x201 could not be re-armed after the Smart Next released it. Keep production at 0 % and restore the hydraulic installation immediately.",
-      "calibration_mode_rearm_too_slow": "Calibration mode remained inactive for 10 seconds or more. Keep production at 0 % and restore the hydraulic installation immediately.",
-      "flow_not_restored": "Normal water flow through the electrolyzer has not been confirmed. Production remains at 0 %; correct the valves/circulation and retry the restoration step."
+      "electrolysis_not_stopped": "Electrolysis could not be verified fully stopped. The hydraulic procedure is blocked.",
+      "calibration_mode_rearm_failed": "Calibration mode 0x201 could not be re-armed after the Smart Next released it. Production remains forced to 0 %. Restore the hydraulic installation immediately.",
+      "calibration_mode_rearm_too_slow": "Calibration mode remained inactive for 10 seconds or more. Production remains forced to 0 %. Restore the hydraulic installation immediately.",
+      "flow_not_restored": "Normal water flow through the electrolyzer has not been confirmed. Production remains at 0 %; correct the valves/circulation and retry the final restoration step."
     },
     "step": {
       "init": {
@@ -88,7 +88,7 @@
       },
       "maintenance_confirm": {
         "title": "Confirm maintenance procedure",
-        "description": "The selected operation writes directly to the Smart Next over local Modbus. Calibration procedures temporarily stop water treatment while calibration mode is active. Confirm only if you want to execute the selected procedure now.",
+        "description": "The selected operation writes directly to the Smart Next over local Modbus. Confirm only if you want to execute the selected procedure now.",
         "data": {"confirm": "I understand and want to execute this procedure"}
       },
       "calibrate_sensor": {
@@ -101,69 +101,151 @@
       },
       "calibrate_ph_fast": {
         "title": "pH — Fast calibration",
-        "description": "Leave the pH probe installed and keep normal circulation running. Current Smart Next pH: {current_ph}. Enter a trusted reference pH. Home Assistant will activate 0x201, write reference ×100 to HR 0x22, trigger 0x50F and display the controller result.",
+        "description": "Leave the pH probe installed and keep normal circulation running. Current Smart Next pH: {current_ph}. Enter a trusted reference pH. Home Assistant activates 0x201, clears IR 0x22 with 0x203, writes reference ×100 to HR 0x22, triggers 0x50F and displays the result.",
         "data": {"reference_ph": "Trusted reference pH"}
       },
       "calibrate_ph_standard_prepare": {
-        "title": "pH Standard — 1/5 · Secure electrolysis",
-        "description": "Keep the valves in their NORMAL circulation position for this step. Home Assistant will save the current electrolysis/flow settings, disable known production overrides and logical flow inputs, force production to 0 %, verify production = 0, current = 0 and electrolysis stopped, then enter calibration mode 0x201. Do not operate the physical bypass until this step succeeds.",
-        "data": {"confirm": "Normal circulation is active; secure the Smart Next now"}
+        "title": "pH Standard — Software safety",
+        "description": "Keep filtration RUNNING and all valves in their NORMAL operating position. Before any hydraulic manipulation, Home Assistant saves the current Smart Next state, disables the logical flow inputs and known electrolysis overrides, forces normal production to 0 %, and verifies production = 0, current = 0 and electrolysis stopped. Calibration mode 0x201 is NOT started yet.",
+        "data": {"confirm": "Normal circulation is active; secure electrolysis at 0 %"}
       },
-      "calibrate_ph_standard_bypass": {
-        "title": "pH Standard — 2/5 · Place the cell on bypass",
-        "description": "Electrolysis has been verified stopped and calibration mode is active. Now position the valves so water bypasses the electrolyzer cell. Confirm only when circulation no longer passes through the cell. The software keeps a persistent 0 % production safety in addition to 0x201.",
-        "data": {"bypass_confirmed": "The electrolyzer is isolated and water is flowing through the bypass"}
+      "calibrate_ph_standard_filtration_off": {
+        "title": "pH Standard — Preparation 1/6 · Stop filtration",
+        "description": "Switch OFF the filtration pump. Check physically that the pump has stopped before validating this step. Electrolysis remains independently forced to 0 % by AstralPool.",
+        "data": {"filtration_off": "The filtration pump is OFF and I have checked that it is stopped"}
+      },
+      "calibrate_ph_standard_bypass_open": {
+        "title": "pH Standard — Preparation 2/6 · Open bypass",
+        "description": "Fully OPEN the electrolyzer bypass valve, then validate.",
+        "data": {"bypass_open": "The electrolyzer bypass valve is OPEN"}
+      },
+      "calibrate_ph_standard_inlet_closed": {
+        "title": "pH Standard — Preparation 3/6 · Close inlet valve",
+        "description": "CLOSE the valve upstream of the electrolyzer, on the probe/inlet side, then validate.",
+        "data": {"inlet_closed": "The upstream/inlet valve is CLOSED"}
+      },
+      "calibrate_ph_standard_outlet_closed": {
+        "title": "pH Standard — Preparation 4/6 · Close outlet valve",
+        "description": "CLOSE the valve downstream of the electrolyzer, at the electrolyzer outlet, then validate. The electrolyzer section is now isolated between the two closed valves.",
+        "data": {"outlet_closed": "The downstream/outlet valve is CLOSED"}
+      },
+      "calibrate_ph_standard_probe_loosened": {
+        "title": "pH Standard — Preparation 5/6 · Loosen the pH probe",
+        "description": "Slightly unscrew the pH probe you are going to remove. Do not remove it completely yet. Validate when it is only loosened.",
+        "data": {"probe_loosened": "The pH probe is slightly loosened but still in place"}
+      },
+      "calibrate_ph_standard_drain_pulse": {
+        "title": "pH Standard — Preparation 6/6 · Lower the water level",
+        "description": "Very slightly OPEN the downstream/outlet valve for no more than 2 seconds, allowing a small amount of air into the isolated section so the water level drops, then CLOSE the valve again immediately. Never leave it open for more than 2 seconds. Validate only after the outlet valve is CLOSED again. Home Assistant will then start the validated calibration session: 0x201 ON → 0x203 → IR 0x22 = 0.",
+        "data": {"drain_done": "I opened the outlet valve for at most 2 seconds and it is CLOSED again"}
       },
       "calibrate_ph_standard_ph7": {
-        "title": "pH Standard — 3/5 · pH 7 point",
-        "description": "Remove the pH probe, rinse/clean it, immerse it in fresh pH 7 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. When confirmed, Home Assistant triggers 0x50D. IR 0x22 = 16 means the first point was accepted and 0x201 remains active for pH 4.",
-        "data": {"stable": "Probe is clean, in pH 7 solution and the reading is stable"}
+        "title": "pH Standard — Calibration 1/2 · pH 7",
+        "description": "Calibration mode is active and IR 0x22 has been cleared. Now fully remove the pH probe, rinse/clean it, immerse it in fresh pH 7 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. Validate to trigger 0x50D. IR 0x22 = 16 means the first point was accepted and 0x201 remains active for pH 4.",
+        "data": {"stable": "The probe is clean, in pH 7 solution and the reading is stable"}
       },
       "calibrate_ph_standard_ph4": {
-        "title": "pH Standard — 4/5 · pH 4 point",
-        "description": "Rinse/clean the probe again, immerse it in fresh pH 4 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. Home Assistant then triggers 0x50E. IR 0x22 = 1 means success. The Smart Next normally releases 0x201 at this point; AstralPool immediately re-arms it while the cell is still bypassed.",
-        "data": {"stable": "Probe is clean, in pH 4 solution and the reading is stable"}
+        "title": "pH Standard — Calibration 2/2 · pH 4",
+        "description": "Rinse/clean the probe again, immerse it in fresh pH 4 reference solution, gently agitate it and wait about 30 seconds until stable. Current reading: {current_ph}. Validate to trigger 0x50E. IR 0x22 = 1 means success. The Smart Next normally releases 0x201 at this point; AstralPool re-arms it immediately while the isolated electrolyzer has not yet been restored.",
+        "data": {"stable": "The probe is clean, in pH 4 solution and the reading is stable"}
       },
       "calibrate_ph_standard_error": {
         "title": "pH Standard — Calibration error",
-        "description": "Result: {error}. A terminal error can make the Smart Next release 0x201. AstralPool re-arms calibration mode immediately and keeps electrolysis independently forced to 0 %. You can restart from pH 7 or end the calibration and safely restore the installation."
+        "description": "Result: {error}. A terminal error can release 0x201 and allow production to resume. AstralPool therefore re-arms 0x201 immediately and keeps the separate 0 % production lock active. Calibration mode must not remain inactive for 10 seconds. Retry from pH 7 or restore the installation safely."
       },
       "calibrate_ph_standard_restore": {
-        "title": "pH Standard — 5/5 · Restore the installation",
-        "description": "Before production can resume: reinstall the pH probe, return ALL bypass valves to normal so water circulates through the electrolyzer, and confirm circulation. Home Assistant will then restore logical flow supervision, verify flow, release 0x201 and only afterwards restore the previous production/override settings.",
-        "data": {
-          "probe_installed": "The pH probe is reinstalled correctly",
-          "valves_normal": "All bypass valves are back in normal operating position",
-          "circulation_restored": "Water circulation through the electrolyzer is restored"
-        }
+        "title": "pH Standard — Restoration 1/5 · Reinstall probe",
+        "description": "Rinse the pH probe if necessary, reinstall it fully and tighten it correctly while both electrolyzer isolation valves remain closed and filtration remains OFF.",
+        "data": {"probe_installed": "The pH probe is fully reinstalled and tightened"}
+      },
+      "calibrate_ph_standard_restore_inlet": {
+        "title": "pH Standard — Restoration 2/5 · Open inlet valve",
+        "description": "With filtration still OFF and the bypass still OPEN, fully OPEN the upstream/inlet valve of the electrolyzer.",
+        "data": {"inlet_open": "The upstream/inlet valve is OPEN"}
+      },
+      "calibrate_ph_standard_restore_outlet": {
+        "title": "pH Standard — Restoration 3/5 · Open outlet valve",
+        "description": "Fully OPEN the downstream/outlet valve of the electrolyzer. Both isolation valves must now be open.",
+        "data": {"outlet_open": "The downstream/outlet valve is OPEN"}
+      },
+      "calibrate_ph_standard_restore_bypass": {
+        "title": "pH Standard — Restoration 4/5 · Close bypass",
+        "description": "CLOSE the electrolyzer bypass valve to return the hydraulic circuit to its normal operating path through the electrolyzer.",
+        "data": {"bypass_closed": "The bypass valve is CLOSED and the hydraulic path is normal"}
+      },
+      "calibrate_ph_standard_restore_filtration": {
+        "title": "pH Standard — Restoration 5/5 · Restart filtration",
+        "description": "Switch the filtration pump back ON and verify that it is really running and water is circulating through the electrolyzer. After confirmation, Home Assistant restores the logical flow sensors, verifies Smart Next flow, releases 0x201, and only then restores the previous electrolysis settings.",
+        "data": {"filtration_on": "Filtration is ON and circulation through the electrolyzer is confirmed"}
       },
       "calibrate_orp_prepare": {
-        "title": "Redox / ORP — 1/4 · Secure electrolysis",
-        "description": "Keep the valves in their NORMAL circulation position. Home Assistant saves the current settings, disables known production overrides and logical flow inputs, forces production to 0 %, verifies production/current/running are zero, then enters calibration mode 0x201. Do not operate the bypass until this step succeeds.",
-        "data": {"confirm": "Normal circulation is active; secure the Smart Next now"}
+        "title": "Redox / ORP — Software safety",
+        "description": "Keep filtration RUNNING and all valves in their NORMAL position. Home Assistant first saves the Smart Next state, disables logical flow inputs and known electrolysis overrides, forces normal production to 0 %, and verifies production = 0, current = 0 and electrolysis stopped. Calibration mode 0x201 is NOT started yet.",
+        "data": {"confirm": "Normal circulation is active; secure electrolysis at 0 %"}
       },
-      "calibrate_orp_bypass": {
-        "title": "Redox / ORP — 2/4 · Place the cell on bypass",
-        "description": "Electrolysis has been verified stopped. Position the valves so circulation bypasses the electrolyzer cell and confirm only when the cell is isolated. A persistent 0 % production safety remains active independently of 0x201.",
-        "data": {"bypass_confirmed": "The electrolyzer is isolated and water is flowing through the bypass"}
+      "calibrate_orp_filtration_off": {
+        "title": "Redox / ORP — Preparation 1/6 · Stop filtration",
+        "description": "Switch OFF the filtration pump. Check physically that the pump has stopped before validating.",
+        "data": {"filtration_off": "The filtration pump is OFF and I have checked that it is stopped"}
+      },
+      "calibrate_orp_bypass_open": {
+        "title": "Redox / ORP — Preparation 2/6 · Open bypass",
+        "description": "Fully OPEN the electrolyzer bypass valve, then validate.",
+        "data": {"bypass_open": "The electrolyzer bypass valve is OPEN"}
+      },
+      "calibrate_orp_inlet_closed": {
+        "title": "Redox / ORP — Preparation 3/6 · Close inlet valve",
+        "description": "CLOSE the valve upstream of the electrolyzer, on the probe/inlet side, then validate.",
+        "data": {"inlet_closed": "The upstream/inlet valve is CLOSED"}
+      },
+      "calibrate_orp_outlet_closed": {
+        "title": "Redox / ORP — Preparation 4/6 · Close outlet valve",
+        "description": "CLOSE the downstream/outlet valve of the electrolyzer, then validate. The electrolyzer section is now isolated.",
+        "data": {"outlet_closed": "The downstream/outlet valve is CLOSED"}
+      },
+      "calibrate_orp_probe_loosened": {
+        "title": "Redox / ORP — Preparation 5/6 · Loosen ORP probe",
+        "description": "Slightly unscrew the ORP probe. Do not remove it completely yet. Validate when it is only loosened.",
+        "data": {"probe_loosened": "The ORP probe is slightly loosened but still in place"}
+      },
+      "calibrate_orp_drain_pulse": {
+        "title": "Redox / ORP — Preparation 6/6 · Lower the water level",
+        "description": "Very slightly OPEN the downstream/outlet valve for no more than 2 seconds so a small amount of air enters and the water level drops, then CLOSE it immediately. Never leave it open for more than 2 seconds. Validate only after the outlet valve is CLOSED again. Home Assistant then starts 0x201 ON → 0x203 → IR 0x22 = 0.",
+        "data": {"drain_done": "I opened the outlet valve for at most 2 seconds and it is CLOSED again"}
       },
       "calibrate_orp_470": {
-        "title": "Redox / ORP — 3/4 · Calibrate at 470 mV",
-        "description": "Remove and clean the ORP probe. Immerse it in fresh 470 mV reference solution at approximately 25 °C, gently agitate it and wait about 30 seconds for a stable reading. Current reading: {current_orp} mV. Home Assistant triggers 0x80F. IR 0x22 = 1 means success. After any terminal result, AstralPool immediately re-arms 0x201 while the cell remains bypassed.",
-        "data": {"stable": "Probe is clean, in 470 mV solution and the reading is stable"}
+        "title": "Redox / ORP — Calibration at 470 mV",
+        "description": "Calibration mode is active and IR 0x22 has been cleared. Fully remove and clean the ORP probe. Immerse it in fresh 470 mV reference solution at approximately 25 °C, gently agitate it and wait about 30 seconds for a stable reading. Current reading: {current_orp} mV. Validate to trigger 0x80F. IR 0x22 = 1 means success. AstralPool immediately re-arms 0x201 after any terminal result while the electrolyzer remains isolated.",
+        "data": {"stable": "The probe is clean, in 470 mV solution and the reading is stable"}
       },
       "calibrate_orp_error": {
         "title": "Redox / ORP — Calibration error",
-        "description": "Result: {error}. The Smart Next can release 0x201 after an error. AstralPool re-arms it immediately and keeps electrolysis independently forced to 0 %. You can retry at 470 mV or end the calibration and safely restore the installation."
+        "description": "Result: {error}. A terminal error can release 0x201. AstralPool re-arms it immediately and keeps electrolysis independently forced to 0 %. Calibration mode must not remain inactive for 10 seconds. Retry at 470 mV or restore the installation safely."
       },
       "calibrate_orp_restore": {
-        "title": "Redox / ORP — 4/4 · Restore the installation",
-        "description": "Reinstall the ORP probe, return ALL bypass valves to normal, and restore water circulation through the electrolyzer. Home Assistant restores logical flow supervision and verifies flow before releasing 0x201 and restoring the previous electrolysis state.",
-        "data": {
-          "probe_installed": "The ORP probe is reinstalled correctly",
-          "valves_normal": "All bypass valves are back in normal operating position",
-          "circulation_restored": "Water circulation through the electrolyzer is restored"
-        }
+        "title": "Redox / ORP — Restoration 1/5 · Reinstall probe",
+        "description": "Rinse the ORP probe if necessary, reinstall it fully and tighten it correctly while both isolation valves remain closed and filtration remains OFF.",
+        "data": {"probe_installed": "The ORP probe is fully reinstalled and tightened"}
+      },
+      "calibrate_orp_restore_inlet": {
+        "title": "Redox / ORP — Restoration 2/5 · Open inlet valve",
+        "description": "With filtration still OFF and bypass still OPEN, fully OPEN the upstream/inlet valve.",
+        "data": {"inlet_open": "The upstream/inlet valve is OPEN"}
+      },
+      "calibrate_orp_restore_outlet": {
+        "title": "Redox / ORP — Restoration 3/5 · Open outlet valve",
+        "description": "Fully OPEN the downstream/outlet valve. Both electrolyzer isolation valves must now be open.",
+        "data": {"outlet_open": "The downstream/outlet valve is OPEN"}
+      },
+      "calibrate_orp_restore_bypass": {
+        "title": "Redox / ORP — Restoration 4/5 · Close bypass",
+        "description": "CLOSE the electrolyzer bypass valve so the hydraulic path is again through the electrolyzer.",
+        "data": {"bypass_closed": "The bypass valve is CLOSED and the hydraulic path is normal"}
+      },
+      "calibrate_orp_restore_filtration": {
+        "title": "Redox / ORP — Restoration 5/5 · Restart filtration",
+        "description": "Switch the filtration pump back ON and verify real circulation through the electrolyzer. Home Assistant then restores logical flow sensors, checks Smart Next flow, releases 0x201, and only afterwards restores the previous electrolysis state.",
+        "data": {"filtration_on": "Filtration is ON and circulation through the electrolyzer is confirmed"}
       },
       "restore_calibration": {
         "title": "Restore factory calibration",

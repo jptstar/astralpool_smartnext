@@ -36,6 +36,7 @@ from .const import (
 )
 from .devices.elyo_touch.api import ElyoTouchApi, ElyoTouchCommunicationError
 from .devices.smartnext.api import SmartNextApi, SmartNextCommunicationError
+from .devices.smartnext.guided_options import SmartNextGuidedCalibrationOptionsMixin
 from .devices.smartnext.maintenance import (
     ACTION_RESTART_DEVICE,
     WATCHDOG_RESTART_SECONDS,
@@ -251,7 +252,10 @@ class AstralPoolConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return AstralPoolOptionsFlow(config_entry)
 
 
-class AstralPoolOptionsFlow(config_entries.OptionsFlow):
+class AstralPoolOptionsFlow(
+    SmartNextGuidedCalibrationOptionsMixin,
+    config_entries.OptionsFlow,
+):
     """Handle AstralPool communication and Smart Next maintenance options."""
 
     def __init__(self, config_entry) -> None:
@@ -338,18 +342,6 @@ class AstralPoolOptionsFlow(config_entries.OptionsFlow):
         """Open restart confirmation."""
         self._maintenance_action = ACTION_RESTART_DEVICE
         return await self.async_step_maintenance_confirm(user_input)
-
-    async def async_step_calibrate_sensor(self, user_input=None) -> ConfigFlowResult:
-        """Choose a sensor to calibrate."""
-        if not self._temperature_available():
-            return self.async_abort(reason="maintenance_unsupported")
-
-        return self.async_show_menu(
-            step_id="calibrate_sensor",
-            menu_options={
-                "calibrate_temperature": "Température",
-            },
-        )
 
     async def async_step_restore_calibration(self, user_input=None) -> ConfigFlowResult:
         """Choose a sensor whose calibration should return to factory defaults."""

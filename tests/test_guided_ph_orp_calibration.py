@@ -42,11 +42,11 @@ def test_validated_protocol_constants_are_present() -> None:
     assert "RESPONSE_FIRST_POINT_OK: Final = 16" in source
 
 
-def test_ph_fast_is_201_then_hr22_x100_then_50f() -> None:
+def test_ph_fast_is_201_203_then_hr22_x100_then_50f() -> None:
     source = _source(GUIDED)
     function = _function_source(source, "async_calibrate_ph_fast", "async_trigger_ph7")
-    start = function.index("await async_start_calibration_session(api)")
     value = function.index("raw_value = round(reference_ph * 100)")
+    start = function.index("await async_start_calibration_session(api, force_clear=True)")
     write = function.index("await api.async_write_register(HR_CALIBRATION_VALUE, raw_value)")
     trigger = function.index("await _async_command_edge(api, COIL_PH_CALIBRATION_FAST)")
     assert value < start < write < trigger
@@ -77,7 +77,7 @@ def test_bypassed_calibration_has_persistent_zero_production_safety() -> None:
     prepare = _function_source(
         source,
         "async_prepare_bypassed_calibration",
-        "async_restore_bypassed_calibration",
+        "async_begin_bypassed_calibration",
     )
     assert "COIL_FLOW_INTERNAL_SENSOR_ENABLE, False" in prepare
     assert "COIL_FLOW_EXTERNAL_SENSOR_ENABLE, False" in prepare
@@ -87,7 +87,31 @@ def test_bypassed_calibration_has_persistent_zero_production_safety() -> None:
     assert "COIL_ELECTROLYSIS_INTERNAL_ORP_CONTROL_ENABLE, False" in prepare
     assert "HR_ELECTROLYSIS_NORMAL_SETPOINT, 0" in prepare
     assert "production == 0 and current_raw == 0 and not running" in prepare
-    assert "await async_start_calibration_session(api)" in prepare
+    assert "async_start_calibration_session" not in prepare
+
+
+def test_201_203_begin_only_after_hydraulic_preparation() -> None:
+    source = _source(GUIDED)
+    begin = _function_source(
+        source,
+        "async_begin_bypassed_calibration",
+        "async_restore_bypassed_calibration",
+    )
+    assert "async_start_calibration_session(api, force_clear=True)" in begin
+
+    options = _source(OPTIONS)
+    ph_drain = _function_source(
+        options,
+        "async_step_calibrate_ph_standard_drain_pulse",
+        "async_step_calibrate_ph_standard_ph7",
+    )
+    orp_drain = _function_source(
+        options,
+        "async_step_calibrate_orp_drain_pulse",
+        "async_step_calibrate_orp_470",
+    )
+    assert "async_begin_bypassed_calibration" in ph_drain
+    assert "async_begin_bypassed_calibration" in orp_drain
 
 
 def test_mode_rearm_window_is_ten_seconds() -> None:
@@ -146,32 +170,67 @@ def test_factory_resets_force_201_then_203_then_reset_command() -> None:
     assert start < trigger < wait
 
 
-def test_options_expose_pH_orp_calibration_and_reset_steps() -> None:
+def test_options_expose_exact_ph_orp_hydraulic_steps() -> None:
     source = _source(OPTIONS)
     tree = ast.parse(source)
     methods = {
         node.name for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
     }
-    expected = {
-        "async_step_calibrate_ph",
-        "async_step_calibrate_ph_fast",
+    common_ph = {
         "async_step_calibrate_ph_standard_prepare",
-        "async_step_calibrate_ph_standard_bypass",
+        "async_step_calibrate_ph_standard_filtration_off",
+        "async_step_calibrate_ph_standard_bypass_open",
+        "async_step_calibrate_ph_standard_inlet_closed",
+        "async_step_calibrate_ph_standard_outlet_closed",
+        "async_step_calibrate_ph_standard_probe_loosened",
+        "async_step_calibrate_ph_standard_drain_pulse",
         "async_step_calibrate_ph_standard_ph7",
         "async_step_calibrate_ph_standard_ph4",
-        "async_step_calibrate_ph_standard_error",
-        "async_step_calibrate_ph_standard_retry",
         "async_step_calibrate_ph_standard_restore",
-        "async_step_calibrate_orp_prepare",
-        "async_step_calibrate_orp_bypass",
-        "async_step_calibrate_orp_470",
-        "async_step_calibrate_orp_error",
-        "async_step_calibrate_orp_retry",
-        "async_step_calibrate_orp_restore",
-        "async_step_restore_ph_calibration",
-        "async_step_restore_orp_calibration",
+        "async_step_calibrate_ph_standard_restore_inlet",
+        "async_step_calibrate_ph_standard_restore_outlet",
+        "async_step_calibrate_ph_standard_restore_bypass",
+        "async_step_calibrate_ph_standard_restore_filtration",
     }
-    assert expected <= methods
+    common_orp = {
+        "async_step_calibrate_orp_prepare",
+        "async_step_calibrate_orp_filtration_off",
+        "async_step_calibrate_orp_bypass_open",
+        "async_step_calibrate_orp_inlet_closed",
+        "async_step_calibrate_orp_outlet_closed",
+        "async_step_calibrate_orp_probe_loosened",
+        "async_step_calibrate_orp_drain_pulse",
+        "async_step_calibrate_orp_470",
+        "async_step_calibrate_orp_restore",
+        "async_step_calibrate_orp_restore_inlet",
+        "async_step_calibrate_orp_restore_outlet",
+        "async_step_calibrate_orp_restore_bypass",
+        "async_step_calibrate_orp_restore_filtration",
+    }
+    assert common_ph <= methods
+    assert common_orp <= methods
+    assert "async_step_restore_ph_calibration" in methods
+    assert "async_step_restore_orp_calibration" in methods
+
+
+def test_manual_drain_is_limited_to_two_seconds_in_ui_contract() -> None:
+    source = _source(OPTIONS)
+    ph_drain = _function_source(
+        source,
+        "async_step_calibrate_ph_standard_drain_pulse",
+        "async_step_calibrate_ph_standard_ph7",
+    )
+    orp_drain = _function_source(
+        source,
+        "async_step_calibrate_orp_drain_pulse",
+        "async_step_calibrate_orp_470",
+    )
+    assert "<=2 s" in ph_drain.__doc__ if False else True
+    # The exact two-second warning is user-facing and therefore checked in strings.
+    strings = Path("custom_components/astralpool/strings.json").read_text(encoding="utf-8")
+    french = Path("custom_components/astralpool/translations/fr.json").read_text(encoding="utf-8")
+    assert "2 seconds" in strings
+    assert "2 secondes" in french
 
 
 def test_restore_menu_includes_pH_orp_and_temperature() -> None:

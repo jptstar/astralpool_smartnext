@@ -94,12 +94,10 @@ def _connection_schema(device_type: str, defaults: dict | None = None) -> vol.Sc
                 CONF_TIMEOUT, default=defaults.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
             ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=60)),
             vol.Required(
-                CONF_RECONNECT_DELAY,
-                default=defaults.get(CONF_RECONNECT_DELAY, DEFAULT_RECONNECT_DELAY),
+                CONF_RECONNECT_DELAY, default=defaults.get(CONF_RECONNECT_DELAY, DEFAULT_RECONNECT_DELAY),
             ): vol.All(vol.Coerce(float), vol.Range(min=0, max=300)),
             vol.Required(
-                CONF_SCAN_INTERVAL,
-                default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                CONF_SCAN_INTERVAL, default=defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
             ): vol.All(
                 vol.Coerce(int),
                 vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
@@ -345,15 +343,16 @@ class AstralPoolOptionsFlow(
 
     async def async_step_restore_calibration(self, user_input=None) -> ConfigFlowResult:
         """Choose a sensor whose calibration should return to factory defaults."""
-        if not self._temperature_available():
+        menu: dict[str, str] = {}
+        if self._ph_available():
+            menu["restore_ph_calibration"] = "pH"
+        if self._orp_available():
+            menu["restore_orp_calibration"] = "Redox / ORP"
+        if self._temperature_available():
+            menu["restore_temperature_calibration"] = "Température"
+        if not menu:
             return self.async_abort(reason="maintenance_unsupported")
-
-        return self.async_show_menu(
-            step_id="restore_calibration",
-            menu_options={
-                "restore_temperature_calibration": "Température",
-            },
-        )
+        return self.async_show_menu(step_id="restore_calibration", menu_options=menu)
 
     async def async_step_calibrate_temperature(self, user_input=None) -> ConfigFlowResult:
         """Calibrate temperature using the validated 0x22 -> 0xB0F sequence."""

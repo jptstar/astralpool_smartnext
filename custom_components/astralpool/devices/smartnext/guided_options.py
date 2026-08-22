@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import voluptuous as vol
 
 from homeassistant.helpers.selector import (
@@ -27,6 +25,8 @@ from .guided_calibration import (
     async_calibrate_ph_fast,
     async_prepare_bypassed_calibration,
     async_rearm_calibration_mode,
+    async_reset_orp_calibration,
+    async_reset_ph_calibration,
     async_restart_orp_after_error,
     async_restart_standard_ph_after_error,
     async_restore_bypassed_calibration,
@@ -77,22 +77,22 @@ class SmartNextGuidedCalibrationOptionsMixin:
     @staticmethod
     def _response_text(response: int | str | None) -> str:
         if response == RESPONSE_E2:
-            return "E2 — valeur détectée trop éloignée de la valeur attendue"
+            return "E2 — IR 0x22 = 2"
         if response == RESPONSE_E3:
-            return "E3 — mesure instable"
+            return "E3 — IR 0x22 = 3"
         if response == RESPONSE_UNAVAILABLE:
-            return "Calibration indisponible dans l’état actuel du Smart Next"
+            return "Calibration unavailable — IR 0x22 = 4"
         if response == RESPONSE_INITIALIZING:
-            return "Le Smart Next indique que le canal est encore en initialisation"
+            return "Sensor initializing — IR 0x22 = 5"
         if response == RESPONSE_MODE_LOST:
-            return "Le mode calibration s’est arrêté sans résultat exploitable"
+            return "Calibration mode ended without a usable response"
         if response == RESPONSE_NONE:
-            return "Aucune réponse de calibration reçue avant le délai"
+            return "No calibration response before timeout"
         if response == "communication":
-            return "Communication Modbus interrompue pendant la calibration"
+            return "Modbus communication interrupted"
         if isinstance(response, str):
             return response
-        return f"Réponse inattendue du registre 0x22 : {response}"
+        return f"Unexpected IR 0x22 response: {response}"
 
     async def async_step_calibrate_sensor(self, user_input=None):
         """Choose one hardware-validated sensor calibration assistant."""
@@ -226,7 +226,9 @@ class SmartNextGuidedCalibrationOptionsMixin:
                 return await self.async_step_calibrate_ph_standard_error()
 
         current = self._config_entry.runtime_data.data.get("ph")
-        current_text = f"{float(current):.2f}" if isinstance(current, (int, float)) else "—"
+        current_text = (
+            f"{float(current):.2f}" if isinstance(current, (int, float)) else "—"
+        )
         return self.async_show_form(
             step_id="calibrate_ph_standard_ph7",
             data_schema=vol.Schema({vol.Required("stable", default=False): bool}),
@@ -260,7 +262,9 @@ class SmartNextGuidedCalibrationOptionsMixin:
                 return await self.async_step_calibrate_ph_standard_error()
 
         current = self._config_entry.runtime_data.data.get("ph")
-        current_text = f"{float(current):.2f}" if isinstance(current, (int, float)) else "—"
+        current_text = (
+            f"{float(current):.2f}" if isinstance(current, (int, float)) else "—"
+        )
         return self.async_show_form(
             step_id="calibrate_ph_standard_ph4",
             data_schema=vol.Schema({vol.Required("stable", default=False): bool}),
@@ -485,5 +489,61 @@ class SmartNextGuidedCalibrationOptionsMixin:
                     vol.Required("circulation_restored", default=False): bool,
                 }
             ),
+            errors=errors,
+        )
+
+    async def async_step_restore_ph_calibration(self, user_input=None):
+        """Restore factory pH calibration with the validated 201/203/reset sequence."""
+        if not self._ph_available():
+            return self.async_abort(reason="maintenance_unsupported")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get("confirm", False):
+                errors["base"] = "confirmation_required"
+            else:
+                try:
+                    response = await async_reset_ph_calibration(
+                        self._config_entry.runtime_data.api
+                    )
+                    await self._config_entry.runtime_data.async_request_refresh()
+                except (SmartNextCommunicationError, OSError, TimeoutError):
+                    errors["base"] = "calibration_communication_failed"
+                except GuidedCalibrationError as err:
+                    errors["base"] = err.reason
+                else:
+                    if response == RESPONSE_OK:
+                        return self.async_abort(reason="ph_reset_ok")
+                    errors["base"] = self._response_error_key(response)
+        return self.async_show_form(
+            step_id="restore_ph_calibration",
+            data_schema=vol.Schema({vol.Required("confirm", default=False): bool}),
+            errors=errors,
+        )
+
+    async def async_step_restore_orp_calibration(self, user_input=None):
+        """Restore factory ORP calibration with the validated 201/203/reset sequence."""
+        if not self._orp_available():
+            return self.async_abort(reason="maintenance_unsupported")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get("confirm", False):
+                errors["base"] = "confirmation_required"
+            else:
+                try:
+                    response = await async_reset_orp_calibration(
+                        self._config_entry.runtime_data.api
+                    )
+                    await self._config_entry.runtime_data.async_request_refresh()
+                except (SmartNextCommunicationError, OSError, TimeoutError):
+                    errors["base"] = "calibration_communication_failed"
+                except GuidedCalibrationError as err:
+                    errors["base"] = err.reason
+                else:
+                    if response == RESPONSE_OK:
+                        return self.async_abort(reason="orp_reset_ok")
+                    errors["base"] = self._response_error_key(response)
+        return self.async_show_form(
+            step_id="restore_orp_calibration",
+            data_schema=vol.Schema({vol.Required("confirm", default=False): bool}),
             errors=errors,
         )
